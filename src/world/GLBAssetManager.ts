@@ -66,6 +66,24 @@ class GLBAssetRegistry {
     return { triangles, meshes };
   }
 
+  private disposeTempObject(root: THREE.Object3D) {
+    root.traverse((obj) => {
+      if ((obj as THREE.Mesh).isMesh) {
+        const m = obj as THREE.Mesh;
+        if (m.geometry) m.geometry.dispose();
+        if (m.material) {
+          if (Array.isArray(m.material)) {
+            m.material.forEach((mat) => {
+              if (mat && !mat.userData?.isSharedMat) mat.dispose();
+            });
+          } else if (!m.material.userData?.isSharedMat) {
+            m.material.dispose();
+          }
+        }
+      }
+    });
+  }
+
   private registerBuiltinDescriptor(
     id: string,
     fileName: string,
@@ -75,6 +93,7 @@ class GLBAssetRegistry {
   ) {
     const sample = factory();
     const stats = this.countStats(sample);
+    this.disposeTempObject(sample);
     this.factoryMap.set(id, factory);
     this.metadataMap.set(id, {
       id,

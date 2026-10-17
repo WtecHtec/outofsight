@@ -54,6 +54,7 @@ export interface HidingSpot {
   hidePosition: THREE.Vector3;
   exitPosition: THREE.Vector3;
   mesh: THREE.Object3D;
+  used?: boolean;
 }
 
 export interface BushZone {

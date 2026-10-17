@@ -28,6 +28,7 @@ export interface MinimapSnapshot {
   snacks?: SnackObject[];
   throwables?: ThrowableObject[];
   colliders: ColliderBox[];
+  monitors?: { x: number; z: number }[];
   globalAlert: number;
   heartbeatIntensity?: number;
   heartbeatBpm?: number;
@@ -150,15 +151,94 @@ export const Minimap: React.FC<MinimapProps> = ({
             ctx.fill();
           });
 
-          // NOTE: Security Guards & Patrol Car ("参保直通车") are intentionally HIDDEN on the map!
-          // Players must rely on 3D line-of-sight and the Proximity Heartbeat audio/pulse sensor!
+          // Draw Street Surveillance Monitors (Cyan Camera Warning Dots with Pulse)
+          if (snap.monitors && snap.monitors.length > 0) {
+            snap.monitors.forEach((mon) => {
+              const mx = toPxX(mon.x);
+              const my = toPxY(mon.z);
+              ctx.fillStyle = '#38bdf8';
+              ctx.beginPath();
+              ctx.arc(mx, my, expanded ? 4.5 : 2.8, 0, Math.PI * 2);
+              ctx.fill();
+              ctx.strokeStyle = '#0284c7';
+              ctx.lineWidth = 1;
+              ctx.stroke();
+            });
+          }
+
+          // Draw Patrol Car ("参保直通车") Direction Detector & Forward Radar Cone
+          const carPx = toPxX(snap.carX);
+          const carPy = toPxY(snap.carZ);
+          const visionRangeMeters = snap.carVisionRange || 30;
+          const coneRadiusPx = (visionRangeMeters / 150) * w;
+          const halfFovRad = (76 * Math.PI) / 360; // 38 deg half-angle
+
+          ctx.save();
+          ctx.translate(carPx, carPy);
+          // In Three.js, yaw=0 faces +Z (down on canvas, which is +PI/2 in canvas arc angles),
+          // and canvas rotation(-carYaw) maps local +Y (down) to world heading (sin(yaw), cos(yaw))
+          ctx.rotate(-snap.carYaw);
+
+          // 1. Forward Vision Sector Cone
+          ctx.fillStyle = snap.carSeesPlayer
+            ? 'rgba(239, 68, 68, 0.34)'
+            : 'rgba(56, 189, 248, 0.22)';
+          ctx.strokeStyle = snap.carSeesPlayer
+            ? 'rgba(248, 113, 113, 0.85)'
+            : 'rgba(56, 189, 248, 0.65)';
+          ctx.lineWidth = expanded ? 1.5 : 1;
+          ctx.beginPath();
+          ctx.moveTo(0, 0);
+          ctx.arc(
+            0,
+            0,
+            coneRadiusPx,
+            Math.PI / 2 - halfFovRad,
+            Math.PI / 2 + halfFovRad
+          );
+          ctx.closePath();
+          ctx.fill();
+          ctx.stroke();
+
+          // 2. Center Forward Direction Detector Ray & Arrowhead
+          ctx.strokeStyle = snap.carSeesPlayer ? '#ef4444' : '#facc15';
+          ctx.lineWidth = expanded ? 2.0 : 1.3;
+          ctx.beginPath();
+          ctx.moveTo(0, 0);
+          ctx.lineTo(0, coneRadiusPx * 0.82);
+          ctx.stroke();
+
+          const arrowTipY = coneRadiusPx * 0.86;
+          ctx.fillStyle = snap.carSeesPlayer ? '#ef4444' : '#facc15';
+          ctx.beginPath();
+          ctx.moveTo(0, arrowTipY);
+          ctx.lineTo(expanded ? -4.5 : -2.8, arrowTipY - (expanded ? 7 : 4.5));
+          ctx.lineTo(expanded ? 4.5 : 2.8, arrowTipY - (expanded ? 7 : 4.5));
+          ctx.closePath();
+          ctx.fill();
+
+          // 3. Patrol Car Chassis Box & Roof Beacon
+          const carW = expanded ? 8 : 5;
+          const carL = expanded ? 13 : 8;
+          ctx.fillStyle = '#facc15';
+          ctx.strokeStyle = '#0f172a';
+          ctx.lineWidth = 1.2;
+          ctx.fillRect(-carW / 2, -carL / 2, carW, carL);
+          ctx.strokeRect(-carW / 2, -carL / 2, carW, carL);
+
+          // Front bumper cyan/red direction bar
+          ctx.fillStyle = snap.carSeesPlayer ? '#ef4444' : '#38bdf8';
+          ctx.fillRect(-carW / 2, carL / 2 - (expanded ? 3 : 2), carW, expanded ? 3 : 2);
+          ctx.restore();
+
+          // Proximity Heartbeat Ripple around Player
           const hb = snap.heartbeatIntensity || 0;
+          const px = toPxX(snap.playerX);
+          const py = toPxY(snap.playerZ);
+
           if (hb > 0.02) {
             const pulseWave = 0.5 + 0.5 * Math.sin(performance.now() * 0.008 * (1 + hb * 2));
-            const px = toPxX(snap.playerX);
-            const py = toPxY(snap.playerZ);
 
-            // Omnidirectional heartbeat ripple around the player (no enemy direction/location revealed)
             ctx.strokeStyle = `rgba(244, 63, 94, ${(hb * 0.65 * pulseWave).toFixed(2)})`;
             ctx.lineWidth = expanded ? 2.5 : 1.8;
             ctx.beginPath();
@@ -171,9 +251,25 @@ export const Minimap: React.FC<MinimapProps> = ({
             ctx.strokeRect(1, 1, w - 2, h - 2);
           }
 
+          // Directional Compass Pointer from Player toward Patrol Car
+          const angleToCar = Math.atan2(carPy - py, carPx - px);
+          const compassOrbitR = expanded ? 16 : 10.5;
+          const tipX = px + Math.cos(angleToCar) * (compassOrbitR + (expanded ? 4 : 3));
+          const tipY = py + Math.sin(angleToCar) * (compassOrbitR + (expanded ? 4 : 3));
+          const leftX = px + Math.cos(angleToCar - 0.35) * compassOrbitR;
+          const leftY = py + Math.sin(angleToCar - 0.35) * compassOrbitR;
+          const rightX = px + Math.cos(angleToCar + 0.35) * compassOrbitR;
+          const rightY = py + Math.sin(angleToCar + 0.35) * compassOrbitR;
+
+          ctx.fillStyle = snap.carSeesPlayer ? '#ef4444' : '#38bdf8';
+          ctx.beginPath();
+          ctx.moveTo(tipX, tipY);
+          ctx.lineTo(leftX, leftY);
+          ctx.lineTo(rightX, rightY);
+          ctx.closePath();
+          ctx.fill();
+
           // Draw Player Marker (Orange Arrow)
-          const px = toPxX(snap.playerX);
-          const py = toPxY(snap.playerZ);
           ctx.save();
           ctx.translate(px, py);
           ctx.rotate(-snap.playerYaw);
@@ -212,7 +308,7 @@ export const Minimap: React.FC<MinimapProps> = ({
       >
         <div className="flex items-center justify-between mb-1 text-[10px] text-slate-300">
           <span className="font-semibold tracking-wide text-slate-200 truncate">
-            街区导航图 (盲区模式)
+            街区导航与车向检测器
           </span>
           <button
             onClick={onToggleExpand}
@@ -232,13 +328,11 @@ export const Minimap: React.FC<MinimapProps> = ({
         <div className="mt-1 flex items-center justify-between text-[9px] text-slate-400">
           <span>橙标:我</span>
           <span>·</span>
-          <span>青点:材料</span>
-          <span>·</span>
-          <span>绿环:撤离</span>
+          <span className="text-amber-300">黄车+蓝扇:参保车方向检测</span>
           {expanded && (
             <>
               <span>·</span>
-              <span className="text-rose-400">保安/车已隐藏(听心跳辨距)</span>
+              <span className="text-rose-400">保安隐匿(听心跳辨距)</span>
             </>
           )}
         </div>

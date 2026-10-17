@@ -21,6 +21,17 @@ class AudioSystem {
     return this.ctx;
   }
 
+  private scheduleDisconnect(osc: OscillatorNode, gain: GainNode) {
+    osc.onended = () => {
+      try {
+        osc.disconnect();
+        gain.disconnect();
+      } catch {
+        // Ignore if already disconnected
+      }
+    };
+  }
+
   public setMuted(muted: boolean) {
     this.isMuted = muted;
   }
@@ -53,6 +64,7 @@ class AudioSystem {
 
     osc.connect(gain);
     gain.connect(ctx.destination);
+    this.scheduleDisconnect(osc, gain);
 
     osc.start(now);
     osc.stop(now + 0.085);
@@ -77,6 +89,7 @@ class AudioSystem {
 
       osc.connect(gain);
       gain.connect(ctx.destination);
+      this.scheduleDisconnect(osc, gain);
       osc.start(now);
       osc.stop(now + 0.4);
     });
@@ -92,6 +105,7 @@ class AudioSystem {
 
       osc.connect(gain);
       gain.connect(ctx.destination);
+      this.scheduleDisconnect(osc, gain);
       osc.start(now + 0.46);
       osc.stop(now + 1.08);
     });
@@ -114,6 +128,7 @@ class AudioSystem {
 
     osc.connect(gain);
     gain.connect(ctx.destination);
+    this.scheduleDisconnect(osc, gain);
     osc.start(now);
     osc.stop(now + 0.4);
   }
@@ -136,6 +151,7 @@ class AudioSystem {
 
     osc.connect(gain);
     gain.connect(ctx.destination);
+    this.scheduleDisconnect(osc, gain);
     osc.start(now);
     osc.stop(now + 0.45);
   }
@@ -157,6 +173,7 @@ class AudioSystem {
 
       osc.connect(gain);
       gain.connect(ctx.destination);
+      this.scheduleDisconnect(osc, gain);
       osc.start(now + idx * 0.065);
       osc.stop(now + idx * 0.065 + 0.26);
     });
@@ -180,6 +197,7 @@ class AudioSystem {
 
       osc.connect(gain);
       gain.connect(ctx.destination);
+      this.scheduleDisconnect(osc, gain);
       osc.start(now + idx * 0.05);
       osc.stop(now + idx * 0.05 + 0.17);
     });
@@ -206,6 +224,7 @@ class AudioSystem {
 
     osc.connect(gain);
     gain.connect(ctx.destination);
+    this.scheduleDisconnect(osc, gain);
     osc.start(now);
     osc.stop(now + 0.16);
   }
@@ -225,6 +244,7 @@ class AudioSystem {
       gain.gain.exponentialRampToValueAtTime(0.001, now + 0.22);
       osc.connect(gain);
       gain.connect(ctx.destination);
+      this.scheduleDisconnect(osc, gain);
       osc.start(now);
       osc.stop(now + 0.24);
     } else {
@@ -237,6 +257,7 @@ class AudioSystem {
         gain.gain.exponentialRampToValueAtTime(0.001, now + offset + 0.18);
         osc.connect(gain);
         gain.connect(ctx.destination);
+        this.scheduleDisconnect(osc, gain);
         osc.start(now + offset);
         osc.stop(now + offset + 0.2);
       });
@@ -264,6 +285,7 @@ class AudioSystem {
 
     osc.connect(gain);
     gain.connect(ctx.destination);
+    this.scheduleDisconnect(osc, gain);
     osc.start(now);
     osc.stop(now + 0.98);
   }
@@ -282,6 +304,7 @@ class AudioSystem {
       gain.gain.exponentialRampToValueAtTime(0.001, now + i * 0.09 + 0.45);
       osc.connect(gain);
       gain.connect(ctx.destination);
+      this.scheduleDisconnect(osc, gain);
       osc.start(now + i * 0.09);
       osc.stop(now + i * 0.09 + 0.46);
     });
@@ -301,6 +324,7 @@ class AudioSystem {
       gain.gain.exponentialRampToValueAtTime(0.001, now + idx * 0.045 + 0.12);
       osc.connect(gain);
       gain.connect(ctx.destination);
+      this.scheduleDisconnect(osc, gain);
       osc.start(now + idx * 0.045);
       osc.stop(now + idx * 0.045 + 0.13);
     });
@@ -319,6 +343,7 @@ class AudioSystem {
     gain.gain.exponentialRampToValueAtTime(0.001, now + 0.19);
     osc.connect(gain);
     gain.connect(ctx.destination);
+    this.scheduleDisconnect(osc, gain);
     osc.start(now);
     osc.stop(now + 0.2);
   }
@@ -339,6 +364,7 @@ class AudioSystem {
     bonkGain.gain.exponentialRampToValueAtTime(0.001, now + 0.16);
     bonkOsc.connect(bonkGain);
     bonkGain.connect(ctx.destination);
+    this.scheduleDisconnect(bonkOsc, bonkGain);
     bonkOsc.start(now);
     bonkOsc.stop(now + 0.17);
 
@@ -353,6 +379,7 @@ class AudioSystem {
       gain.gain.exponentialRampToValueAtTime(0.001, now + 0.08 + idx * 0.06 + 0.12);
       osc.connect(gain);
       gain.connect(ctx.destination);
+      this.scheduleDisconnect(osc, gain);
       osc.start(now + 0.08 + idx * 0.06);
       osc.stop(now + 0.08 + idx * 0.06 + 0.13);
     });
@@ -374,6 +401,7 @@ class AudioSystem {
       gain.gain.exponentialRampToValueAtTime(0.001, now + 0.3);
       osc.connect(gain);
       gain.connect(ctx.destination);
+      this.scheduleDisconnect(osc, gain);
       osc.start(now);
       osc.stop(now + 0.31);
     });
@@ -388,6 +416,7 @@ class AudioSystem {
       gain.gain.exponentialRampToValueAtTime(0.001, now + offset + 0.09);
       osc.connect(gain);
       gain.connect(ctx.destination);
+      this.scheduleDisconnect(osc, gain);
       osc.start(now + offset);
       osc.stop(now + offset + 0.1);
     });
@@ -407,6 +436,7 @@ class AudioSystem {
       gain.gain.exponentialRampToValueAtTime(0.001, now + i * 0.12 + 0.35);
       osc.connect(gain);
       gain.connect(ctx.destination);
+      this.scheduleDisconnect(osc, gain);
       osc.start(now + i * 0.12);
       osc.stop(now + i * 0.12 + 0.36);
     });
@@ -474,6 +504,15 @@ class AudioSystem {
     osc1.connect(gain1);
     sub1.connect(gain1);
     gain1.connect(ctx.destination);
+    osc1.onended = () => {
+      try {
+        osc1.disconnect();
+        sub1.disconnect();
+        gain1.disconnect();
+      } catch {
+        // ignore
+      }
+    };
     osc1.start(now);
     sub1.start(now);
     osc1.stop(now + 0.13);
@@ -493,6 +532,7 @@ class AudioSystem {
 
     osc2.connect(gain2);
     gain2.connect(ctx.destination);
+    this.scheduleDisconnect(osc2, gain2);
     osc2.start(now + dubDelay);
     osc2.stop(now + dubDelay + 0.11);
   }
@@ -511,8 +551,53 @@ class AudioSystem {
       gain.gain.exponentialRampToValueAtTime(0.001, now + i * 0.07 + 0.15);
       osc.connect(gain);
       gain.connect(ctx.destination);
+      this.scheduleDisconnect(osc, gain);
       osc.start(now + i * 0.07);
       osc.stop(now + i * 0.07 + 0.16);
+    });
+  }
+
+  public playMonitorDeploy() {
+    const ctx = this.ensureContext();
+    if (!ctx) return;
+    const now = ctx.currentTime;
+
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(440, now);
+    osc.frequency.linearRampToValueAtTime(880, now + 0.12);
+    osc.frequency.linearRampToValueAtTime(1760, now + 0.22);
+
+    gain.gain.setValueAtTime(0.08, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.32);
+
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    this.scheduleDisconnect(osc, gain);
+    osc.start(now);
+    osc.stop(now + 0.35);
+  }
+
+  public playMonitorTriggerAlarm() {
+    const ctx = this.ensureContext();
+    if (!ctx) return;
+    const now = ctx.currentTime;
+
+    [1200, 1600, 1200, 1800].forEach((freq, idx) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(freq, now + idx * 0.08);
+
+      gain.gain.setValueAtTime(0.12, now + idx * 0.08);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + idx * 0.08 + 0.18);
+
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      this.scheduleDisconnect(osc, gain);
+      osc.start(now + idx * 0.08);
+      osc.stop(now + idx * 0.08 + 0.2);
     });
   }
 }

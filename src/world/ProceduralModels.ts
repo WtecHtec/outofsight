@@ -10,12 +10,17 @@ export interface PlayerRig {
   rightArm: THREE.Group;
   leftLeg: THREE.Group;
   rightLeg: THREE.Group;
+  scarfGroup?: THREE.Group;
 }
 
 /**
- * Builds the Reference Image 1 Stylized Chibi Low-Poly Character Rig using 100% solid,
- * closed Three.js primitives with flatShading materials (no LatheGeometry/ExtrudeGeometry
- * winding or NaN normal issues).
+ * Builds an upgraded, high-detail Stylized 3D Character Rig for each of the 4 playable characters
+ * ("luna_cyber", "street_kid", "flash_rider", "suited_worker") with:
+ * - Clean, uncovered sculpted 3D anime face (expressive eyes, iris, catchlights, lashes, blush, nose, smile)
+ * - Multi-layered 3D hairstyle (crown dome, parted front bangs, cheek side-locks, character back-hair/twin-tails)
+ * - Sculpted torso with shoulder pads, open jacket lapels, flared lower coat-hem & utility belt
+ * - Dynamic flowing back scarf / cyber ribbon ("scarfGroup") that sways during movement
+ * - Articulated knee/elbow joints, high-top sneakers/boots & Ground Direction Foot-Ring
  */
 export function createPlayerModel(
   mats: MaterialLibrary,
@@ -29,336 +34,555 @@ export function createPlayerModel(
   group.add(bodyGroup);
 
   const eyeWhiteMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
-  const eyePupilMat = new THREE.MeshBasicMaterial({
-    color: characterId === 'luna_cyber' ? 0x26174a : 0x181326,
+  const eyeIrisMat = new THREE.MeshBasicMaterial({
+    color:
+      characterId === 'luna_cyber'
+        ? 0x06b6d4
+        : characterId === 'street_kid'
+        ? 0xf59e0b
+        : characterId === 'flash_rider'
+        ? 0x10b981
+        : 0x3b82f6,
+  });
+  const eyePupilMat = new THREE.MeshBasicMaterial({ color: 0x0f172a });
+  const blushMat = new THREE.MeshBasicMaterial({
+    color: 0xf43f5e,
+    transparent: true,
+    opacity: 0.42,
   });
   const browMat = new THREE.MeshStandardMaterial({
-    color: characterId === 'luna_cyber' ? 0x231542 : 0x1e1829,
-    roughness: 0.7,
-    flatShading: true,
+    color: characterId === 'luna_cyber' ? 0x311042 : 0x1e1b2e,
+    roughness: 0.55,
   });
   const riderYellowMat = new THREE.MeshStandardMaterial({
     color: 0xfacc15,
-    roughness: 0.4,
-    metalness: 0.08,
-    flatShading: true,
+    roughness: 0.32,
+    metalness: 0.14,
   });
   const suitCharcoalMat = new THREE.MeshStandardMaterial({
-    color: 0x29253b,
-    roughness: 0.58,
-    metalness: 0.1,
-    flatShading: true,
+    color: 0x1e293b,
+    roughness: 0.48,
+    metalness: 0.16,
+  });
+  const neonCyanGlowMat = new THREE.MeshBasicMaterial({
+    color: 0x22d3ee,
+  });
+  const sneakerWhiteMat = new THREE.MeshStandardMaterial({
+    color: 0xf8fafc,
+    roughness: 0.36,
+  });
+  const smoothSkinMat = new THREE.MeshStandardMaterial({
+    color: 0xf6b697,
+    roughness: 0.52,
+    metalness: 0.02,
   });
 
-  // Ground contact shadow plane
+  // Ground contact shadow plane + crisp Player Foot-Ring & Forward Direction Chevron
   const shadowPlane = new THREE.Mesh(
-    new THREE.PlaneGeometry(1.45, 1.45),
+    new THREE.PlaneGeometry(1.48, 1.48),
     mats.contactShadowMat
   );
   shadowPlane.rotation.x = -Math.PI / 2;
   shadowPlane.position.y = 0.02;
   group.add(shadowPlane);
 
+  const footRingGeo = new THREE.RingGeometry(0.44, 0.53, 28);
+  footRingGeo.rotateX(-Math.PI / 2);
+  const footRingMat = new THREE.MeshBasicMaterial({
+    color:
+      characterId === 'luna_cyber'
+        ? 0x22d3ee
+        : characterId === 'flash_rider'
+        ? 0xfacc15
+        : 0xf59e0b,
+    transparent: true,
+    opacity: 0.62,
+    side: THREE.DoubleSide,
+    depthWrite: false,
+  });
+  const footRing = new THREE.Mesh(footRingGeo, footRingMat);
+  footRing.position.y = 0.035;
+  group.add(footRing);
+
+  // Forward pointer chevron on the foot ring (+Z forward)
+  const dirArrowGeo = new THREE.ConeGeometry(0.13, 0.26, 3);
+  dirArrowGeo.rotateX(Math.PI / 2);
+  const dirArrow = new THREE.Mesh(dirArrowGeo, footRingMat);
+  dirArrow.position.set(0, 0.04, 0.64);
+  group.add(dirArrow);
+
   // ============================================================================
-  // 1. STURDY TAPERED 4-SIDED LOW-POLY LEGS & WEDGE FEET (Reference Image 1)
+  // 1. ARTICULATED LEGS, TACTICAL KNEE PADS & HIGH-DETAIL SNEAKERS / CYBER BOOTS
   // ============================================================================
-  const buildChibiLeg = (isLeft: boolean) => {
-    const xOffset = isLeft ? -0.14 : 0.14;
+  const buildLeg = (isLeft: boolean) => {
+    const xOffset = isLeft ? -0.145 : 0.145;
     const legGroup = new THREE.Group();
     legGroup.name = isLeft ? 'leftLeg' : 'rightLeg';
-    legGroup.position.set(xOffset, 0.56, 0);
+    legGroup.position.set(xOffset, 0.58, 0);
 
-    const legMat =
+    const upperLegMat =
       characterId === 'luna_cyber'
-        ? mats.skinTone
+        ? mats.buildingRoofDark
         : characterId === 'suited_worker'
         ? suitCharcoalMat
         : mats.playerDarkPants;
 
-    // 6-sided tapered low-poly leg shaft
-    const legShaftGeo = new THREE.CylinderGeometry(0.11, 0.085, 0.46, 6);
-    const legShaft = new THREE.Mesh(legShaftGeo, legMat);
-    legShaft.position.y = -0.22;
-    legShaft.castShadow = true;
-    legShaft.receiveShadow = true;
-    legGroup.add(legShaft);
+    // Upper thigh
+    const thigh = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.115, 0.098, 0.25, 12),
+      upperLegMat
+    );
+    thigh.position.y = -0.11;
+    thigh.castShadow = true;
+    legGroup.add(thigh);
 
-    // Chibi Wedge Foot
-    const footMat =
+    // Knee joint / sculpted knee guard
+    const kneeMat =
       characterId === 'luna_cyber'
-        ? mats.skinTone
+        ? mats.lunaCyanArmor
+        : characterId === 'flash_rider'
+        ? mats.tireRubber
+        : upperLegMat;
+    const knee = new THREE.Mesh(new THREE.SphereGeometry(0.096, 10, 10), kneeMat);
+    knee.position.set(0, -0.24, 0.02);
+    legGroup.add(knee);
+
+    // Lower calf / boot shaft
+    const calfMat =
+      characterId === 'luna_cyber'
+        ? mats.buildingRoofDark
+        : characterId === 'suited_worker'
+        ? suitCharcoalMat
+        : mats.playerDarkPants;
+    const calf = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.098, 0.084, 0.24, 12),
+      calfMat
+    );
+    calf.position.y = -0.35;
+    calf.castShadow = true;
+    legGroup.add(calf);
+
+    // Boot cuff ring
+    const bootCuff = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.096, 0.094, 0.05, 12),
+      characterId === 'luna_cyber' ? mats.lunaCyanArmor : sneakerWhiteMat
+    );
+    bootCuff.position.y = -0.43;
+    legGroup.add(bootCuff);
+
+    // Character-specific Footwear (Cyber Boot / High-Top Sneaker / Rider Boot / Dress Shoe)
+    const shoeUpperMat =
+      characterId === 'luna_cyber'
+        ? mats.lunaPurpleSash
         : characterId === 'flash_rider'
         ? riderYellowMat
         : characterId === 'suited_worker'
         ? mats.tireRubber
         : mats.playerAccentOrange;
 
-    const foot = new THREE.Mesh(
-      new THREE.BoxGeometry(0.15, 0.1, 0.24),
-      footMat
+    const shoeBody = new THREE.Mesh(
+      new THREE.BoxGeometry(0.165, 0.105, 0.255),
+      shoeUpperMat
     );
-    foot.position.set(0, -0.47, 0.04);
-    foot.castShadow = true;
-    legGroup.add(foot);
+    shoeBody.position.set(0, -0.49, 0.045);
+    shoeBody.castShadow = true;
+    legGroup.add(shoeBody);
 
-    // Dark sandal/shoe sole base
-    const sole = new THREE.Mesh(
-      new THREE.BoxGeometry(0.16, 0.035, 0.25),
-      mats.tireRubber
+    // Rounded sneaker toe-cap
+    const toeCap = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.08, 0.082, 0.155, 10).rotateZ(Math.PI / 2),
+      characterId === 'suited_worker' ? mats.tireRubber : sneakerWhiteMat
     );
-    sole.position.set(0, -0.525, 0.04);
+    toeCap.position.set(0, -0.5, 0.145);
+    legGroup.add(toeCap);
+
+    // Thick outsole
+    const soleMat =
+      characterId === 'luna_cyber'
+        ? neonCyanGlowMat
+        : characterId === 'suited_worker'
+        ? mats.tireRubber
+        : sneakerWhiteMat;
+    const sole = new THREE.Mesh(
+      new THREE.BoxGeometry(0.176, 0.038, 0.285),
+      soleMat
+    );
+    sole.position.set(0, -0.545, 0.05);
     legGroup.add(sole);
 
     return legGroup;
   };
 
-  const leftLeg = buildChibiLeg(true);
-  const rightLeg = buildChibiLeg(false);
+  const leftLeg = buildLeg(true);
+  const rightLeg = buildLeg(false);
   bodyGroup.add(leftLeg, rightLeg);
 
   // ============================================================================
-  // 2. FACETED CHIBI TORSO, DIAMOND CHEST PLATE, WAIST BUCKLE & SASH (Ref Image 1)
+  // 2. SCULPTED LAYERED TORSO, JACKET HEM, SHOULDER PADS & DYNAMIC BACK SCARF
   // ============================================================================
-  const primaryArmorMat =
+  const primaryTopMat =
     characterId === 'luna_cyber'
-      ? mats.lunaCyanArmor
+      ? mats.lunaPurpleSash
       : characterId === 'flash_rider'
       ? riderYellowMat
       : characterId === 'suited_worker'
       ? suitCharcoalMat
       : mats.playerAccentOrange;
 
-  const secondarySashMat =
+  const innerShirtMat =
     characterId === 'luna_cyber'
-      ? mats.lunaPurpleSash
+      ? mats.lunaCyanArmor
       : characterId === 'flash_rider'
       ? mats.buildingRoofDark
       : characterId === 'suited_worker'
-      ? mats.patrolWhite
+      ? sneakerWhiteMat
       : mats.playerJacket;
 
-  const trimAccentMat =
+  // Pelvis / Shorts / Trousers Hip Block
+  const pelvis = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.188, 0.205, 0.21, 12),
+    characterId === 'suited_worker' ? suitCharcoalMat : mats.playerDarkPants
+  );
+  pelvis.position.set(0, 0.65, 0);
+  pelvis.castShadow = true;
+  bodyGroup.add(pelvis);
+
+  // Flared Open Jacket Lower Coat-Hem (gives a sleek heroic 3D silhouette from behind & side!)
+  const coatHem = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.205, 0.255, 0.16, 12, 1, true, Math.PI * 0.18, Math.PI * 1.64),
+    primaryTopMat
+  );
+  coatHem.scale.set(1.1, 1.0, 0.88);
+  coatHem.position.set(0, 0.69, -0.01);
+  coatHem.castShadow = true;
+  bodyGroup.add(coatHem);
+
+  // Tactical Utility Belt & Glowing / Gold Buckle
+  const belt = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.204, 0.204, 0.055, 12),
+    mats.tireRubber
+  );
+  belt.position.set(0, 0.73, 0);
+  bodyGroup.add(belt);
+
+  const buckle = new THREE.Mesh(
+    new THREE.BoxGeometry(0.105, 0.072, 0.045),
+    characterId === 'luna_cyber' ? neonCyanGlowMat : mats.officerBadgeGold
+  );
+  buckle.position.set(0, 0.73, 0.198);
+  bodyGroup.add(buckle);
+
+  // Main Sculpted Upper Torso / Jacket
+  const torso = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.248, 0.196, 0.39, 12),
+    primaryTopMat
+  );
+  torso.scale.set(1.12, 1.0, 0.86);
+  torso.position.set(0, 0.92, 0);
+  torso.castShadow = true;
+  torso.receiveShadow = true;
+  bodyGroup.add(torso);
+
+  // Sculpted Left & Right Shoulder Epaulettes / Armor Caps
+  [-1, 1].forEach((side) => {
+    const shoulderCap = new THREE.Mesh(
+      new THREE.SphereGeometry(0.105, 10, 10),
+      characterId === 'luna_cyber' ? mats.lunaCyanArmor : primaryTopMat
+    );
+    shoulderCap.scale.set(1.15, 0.72, 0.95);
+    shoulderCap.position.set(side * 0.265, 1.06, 0);
+    shoulderCap.castShadow = true;
+    bodyGroup.add(shoulderCap);
+  });
+
+  // Front Inner Shirt / Vest V-Panel
+  const frontShirtPanel = new THREE.Mesh(
+    new THREE.BoxGeometry(0.185, 0.35, 0.042),
+    innerShirtMat
+  );
+  frontShirtPanel.position.set(0, 0.92, 0.185);
+  bodyGroup.add(frontShirtPanel);
+
+  // Left & Right Jacket Lapels / Open Front Panels with Accent Trim
+  [-1, 1].forEach((side) => {
+    const lapel = new THREE.Mesh(
+      new THREE.BoxGeometry(0.088, 0.37, 0.058),
+      primaryTopMat
+    );
+    lapel.position.set(side * 0.112, 0.92, 0.188);
+    lapel.rotation.z = side * 0.08;
+    lapel.castShadow = true;
+    bodyGroup.add(lapel);
+
+    const lapelTrim = new THREE.Mesh(
+      new THREE.BoxGeometry(0.02, 0.36, 0.062),
+      characterId === 'luna_cyber' ? neonCyanGlowMat : sneakerWhiteMat
+    );
+    lapelTrim.position.set(side * 0.072, 0.92, 0.192);
+    lapelTrim.rotation.z = side * 0.08;
+    bodyGroup.add(lapelTrim);
+  });
+
+  // Dynamic Flowing Back Scarf / Cyber Ribbon (sways during movement in App.tsx!)
+  const scarfGroup = new THREE.Group();
+  scarfGroup.name = 'scarfGroup';
+  scarfGroup.position.set(0, 1.08, -0.16);
+  const scarfMat =
     characterId === 'luna_cyber'
-      ? mats.lunaCyanDark
+      ? mats.lunaCyanArmor
+      : characterId === 'flash_rider'
+      ? mats.playerAccentOrange
       : characterId === 'suited_worker'
       ? mats.sirenRed
       : mats.lunaCyanArmor;
-
-  // Lower pelvis / waist block
-  const pelvis = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.18, 0.2, 0.22, 8),
-    characterId === 'luna_cyber' ? mats.skinTone : secondarySashMat
-  );
-  pelvis.position.set(0, 0.64, 0);
-  pelvis.castShadow = true;
-  pelvis.receiveShadow = true;
-  bodyGroup.add(pelvis);
-
-  // Main Faceted Upper Chest / Tunic (8-sided polygonal torso)
-  const chest = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.24, 0.18, 0.38, 8),
-    primaryArmorMat
-  );
-  chest.scale.set(1.1, 1.0, 0.85);
-  chest.position.set(0, 0.89, 0);
-  chest.castShadow = true;
-  chest.receiveShadow = true;
-  bodyGroup.add(chest);
-
-  // Faceted Polygonal Chest Plate Bevel
-  const chestFacet = new THREE.Mesh(
-    new THREE.OctahedronGeometry(0.19, 0),
-    primaryArmorMat
-  );
-  chestFacet.scale.set(1.25, 0.75, 0.68);
-  chestFacet.position.set(0, 0.9, 0.08);
-  chestFacet.castShadow = true;
-  bodyGroup.add(chestFacet);
-
-  // Center Chest Diamond Gem (Reference Image 1)
-  const chestGem = new THREE.Mesh(
-    new THREE.OctahedronGeometry(0.08, 0),
-    characterId === 'suited_worker' ? mats.sirenRed : mats.lunaCyanArmor
-  );
-  chestGem.scale.set(0.85, 1.35, 0.48);
-  chestGem.position.set(0, 0.92, 0.185);
-  bodyGroup.add(chestGem);
-
-  // Large Layered Waist Diamond Emblem (Reference Image 1 center waist diamond)
-  const outerBuckle = new THREE.Mesh(
-    new THREE.OctahedronGeometry(0.14, 0),
-    primaryArmorMat
-  );
-  outerBuckle.scale.set(1.0, 1.18, 0.42);
-  outerBuckle.position.set(0, 0.68, 0.175);
-  bodyGroup.add(outerBuckle);
-
-  const innerBuckle = new THREE.Mesh(
-    new THREE.OctahedronGeometry(0.072, 0),
-    secondarySashMat
-  );
-  innerBuckle.scale.set(1.0, 1.15, 0.48);
-  innerBuckle.position.set(0, 0.68, 0.2);
-  bodyGroup.add(innerBuckle);
-
-  // Left & Right Angled Geometric Hip Armor Plates (Tassets from Reference Image 1)
   [-1, 1].forEach((side) => {
-    const tassetGroup = new THREE.Group();
-    tassetGroup.position.set(side * 0.21, 0.58, 0.02);
-    tassetGroup.rotation.z = side * -0.22;
-
-    const outerPlate = new THREE.Mesh(
-      new THREE.BoxGeometry(0.055, 0.25, 0.24),
-      primaryArmorMat
+    const ribbon = new THREE.Mesh(
+      new THREE.BoxGeometry(0.075, 0.38, 0.022),
+      scarfMat
     );
-    outerPlate.castShadow = true;
-    const innerPlate = new THREE.Mesh(
-      new THREE.BoxGeometry(0.065, 0.16, 0.15),
-      secondarySashMat
-    );
-    tassetGroup.add(outerPlate, innerPlate);
-    bodyGroup.add(tassetGroup);
+    ribbon.position.set(side * 0.13, -0.18, -0.06);
+    ribbon.rotation.z = side * 0.16;
+    ribbon.rotation.x = 0.24;
+    ribbon.castShadow = true;
+    scarfGroup.add(ribbon);
   });
+  bodyGroup.add(scarfGroup);
 
-  // Front Purple Sash / Tabard hanging between legs (Solid Box + Octahedron tip!)
-  const frontSashUpper = new THREE.Mesh(
-    new THREE.BoxGeometry(0.21, 0.28, 0.05),
-    secondarySashMat
-  );
-  frontSashUpper.position.set(0, 0.48, 0.155);
-  frontSashUpper.castShadow = true;
-  bodyGroup.add(frontSashUpper);
-
-  const frontSashPoint = new THREE.Mesh(
-    new THREE.OctahedronGeometry(0.12, 0),
-    secondarySashMat
-  );
-  frontSashPoint.scale.set(0.88, 1.2, 0.32);
-  frontSashPoint.position.set(0.02, 0.33, 0.155);
-  frontSashPoint.rotation.z = 0.18;
-  frontSashPoint.castShadow = true;
-  bodyGroup.add(frontSashPoint);
-
-  // Back Sash / Capelet Panel so back view is equally detailed
-  const backSash = new THREE.Mesh(
-    new THREE.BoxGeometry(0.24, 0.3, 0.05),
-    secondarySashMat
-  );
-  backSash.position.set(0, 0.5, -0.155);
-  backSash.castShadow = true;
-  bodyGroup.add(backSash);
-
-  // Character-Specific Back Gear
-  if (characterId === 'flash_rider') {
-    const deliveryBox = new THREE.Mesh(
-      new THREE.BoxGeometry(0.4, 0.38, 0.24),
-      riderYellowMat
+  // Character-Specific Torso & Back Gear Details
+  if (characterId === 'luna_cyber') {
+    // High Tech Popped Collar with Neon Cyan Trim
+    const cyberCollar = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.195, 0.165, 0.13, 12, 1, true, Math.PI * 0.25, Math.PI * 1.5),
+      mats.lunaCyanArmor
     );
-    deliveryBox.position.set(0, 0.9, -0.24);
-    deliveryBox.castShadow = true;
-    bodyGroup.add(deliveryBox);
-  } else if (characterId === 'street_kid') {
-    const backpack = new THREE.Mesh(
-      new THREE.BoxGeometry(0.34, 0.36, 0.18),
+    cyberCollar.position.set(0, 1.12, -0.02);
+    bodyGroup.add(cyberCollar);
+
+    // Sleek Back Holographic Stealth Wing-Jetpack Core
+    const cyberPack = new THREE.Mesh(
+      new THREE.BoxGeometry(0.28, 0.3, 0.12),
       mats.buildingRoofDark
     );
-    backpack.position.set(0, 0.88, -0.22);
+    cyberPack.position.set(0, 0.92, -0.22);
+    cyberPack.castShadow = true;
+    const coreRing = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.082, 0.082, 0.045, 12).rotateX(Math.PI / 2),
+      neonCyanGlowMat
+    );
+    coreRing.position.set(0, 0.92, -0.285);
+    [-1, 1].forEach((side) => {
+      const wingFin = new THREE.Mesh(
+        new THREE.BoxGeometry(0.16, 0.24, 0.03),
+        mats.lunaCyanArmor
+      );
+      wingFin.position.set(side * 0.2, 0.95, -0.24);
+      wingFin.rotation.z = side * -0.35;
+      bodyGroup.add(wingFin);
+    });
+    bodyGroup.add(cyberPack, coreRing);
+  } else if (characterId === 'street_kid') {
+    // Draped Hoodie Hood on Back + Backpack + Diagonal 3D Skateboard!
+    const hoodBack = new THREE.Mesh(
+      new THREE.SphereGeometry(0.165, 10, 10),
+      mats.playerAccentOrange
+    );
+    hoodBack.scale.set(1.25, 0.72, 0.92);
+    hoodBack.position.set(0, 1.08, -0.17);
+    bodyGroup.add(hoodBack);
+
+    const backpack = new THREE.Mesh(
+      new THREE.BoxGeometry(0.32, 0.35, 0.16),
+      mats.buildingRoofDark
+    );
+    backpack.position.set(0, 0.87, -0.23);
     backpack.castShadow = true;
     bodyGroup.add(backpack);
+
+    // 3D Skateboard strapped diagonally to the backpack
+    const boardGroup = new THREE.Group();
+    boardGroup.position.set(0, 0.89, -0.33);
+    boardGroup.rotation.z = 0.52;
+    const deck = new THREE.Mesh(
+      new THREE.BoxGeometry(0.185, 0.64, 0.028),
+      mats.lunaCyanArmor
+    );
+    deck.castShadow = true;
+    boardGroup.add(deck);
+    [-0.18, 0.18].forEach((wy) => {
+      [-0.075, 0.075].forEach((wx) => {
+        const wheel = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.034, 0.034, 0.032, 10).rotateZ(Math.PI / 2),
+          mats.playerAccentOrange
+        );
+        wheel.position.set(wx, wy, -0.032);
+        boardGroup.add(wheel);
+      });
+    });
+    bodyGroup.add(boardGroup);
+  } else if (characterId === 'flash_rider') {
+    // High-Vis Reflective Chest Stripe + Detailed Thermal Delivery Box
+    const chestStripe = new THREE.Mesh(
+      new THREE.BoxGeometry(0.46, 0.05, 0.36),
+      sneakerWhiteMat
+    );
+    chestStripe.position.set(0, 0.94, 0.02);
+    bodyGroup.add(chestStripe);
+
+    const deliveryBox = new THREE.Group();
+    deliveryBox.position.set(0, 0.92, -0.29);
+    const mainBox = new THREE.Mesh(
+      new THREE.BoxGeometry(0.42, 0.4, 0.28),
+      riderYellowMat
+    );
+    mainBox.castShadow = true;
+    const lidRim = new THREE.Mesh(
+      new THREE.BoxGeometry(0.44, 0.06, 0.3),
+      mats.tireRubber
+    );
+    lidRim.position.y = 0.18;
+    const reflector = new THREE.Mesh(
+      new THREE.BoxGeometry(0.34, 0.08, 0.02),
+      mats.sirenRed
+    );
+    reflector.position.set(0, 0, -0.145);
+    deliveryBox.add(mainBox, lidRim, reflector);
+    bodyGroup.add(deliveryBox);
+  } else if (characterId === 'suited_worker') {
+    // Crisp Red Silk Tie + ID Lanyard + Leather Laptop Briefcase Pack
+    const redTie = new THREE.Mesh(
+      new THREE.BoxGeometry(0.055, 0.26, 0.025),
+      mats.sirenRed
+    );
+    redTie.position.set(0, 0.9, 0.21);
+    const idBadge = new THREE.Mesh(
+      new THREE.BoxGeometry(0.075, 0.095, 0.015),
+      mats.lunaCyanArmor
+    );
+    idBadge.position.set(0.11, 0.92, 0.215);
+    const leatherPack = new THREE.Mesh(
+      new THREE.BoxGeometry(0.3, 0.34, 0.13),
+      mats.crateWood
+    );
+    leatherPack.position.set(0, 0.89, -0.22);
+    leatherPack.castShadow = true;
+    bodyGroup.add(leatherPack);
   }
 
-  // Neck & Choker Collar
+  // Sculpted Neck & Choker Band
   const neck = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.09, 0.1, 0.14, 8),
-    mats.skinTone
+    new THREE.CylinderGeometry(0.082, 0.094, 0.14, 12),
+    smoothSkinMat
   );
-  neck.position.set(0, 1.1, 0);
+  neck.position.set(0, 1.15, 0);
   bodyGroup.add(neck);
 
-  const choker = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.105, 0.11, 0.05, 8),
-    secondarySashMat
-  );
-  choker.position.set(0, 1.07, 0);
-  bodyGroup.add(choker);
-
   // ============================================================================
-  // 3. BIG CHIBI FACETED HEAD, ANIME EYES & BOB-CUT HAIR WITH DIAMOND (Ref 1)
+  // 3. EXPRESSIVE STYLIZED 3D HEAD, UNCOVERED ANIME FACE & MULTI-LAYERED HAIR
   // ============================================================================
   const headGroup = new THREE.Group();
   headGroup.name = 'headGroup';
-  headGroup.position.set(0, 1.4, 0);
+  headGroup.position.set(0, 1.42, 0);
   bodyGroup.add(headGroup);
 
-  // Solid Low-Poly Faceted Chibi Head (Icosahedron subdivision 1 = 80 crisp low-poly facets!)
-  const faceGeo = new THREE.IcosahedronGeometry(0.285, 1);
-  const faceMesh = new THREE.Mesh(faceGeo, mats.skinTone);
-  faceMesh.scale.set(1.12, 0.98, 0.94);
+  // Smooth Sculpted Head (Front surface at z = +0.232)
+  const faceGeo = new THREE.SphereGeometry(0.245, 20, 16);
+  const faceMesh = new THREE.Mesh(faceGeo, smoothSkinMat);
+  faceMesh.scale.set(1.05, 0.98, 0.94);
   faceMesh.castShadow = true;
   faceMesh.receiveShadow = true;
   headGroup.add(faceMesh);
 
-  // Crisp Faceted 3D Nose Wedge
+  // 3D Ears on Left & Right
+  [-1, 1].forEach((side) => {
+    const ear = new THREE.Mesh(
+      new THREE.SphereGeometry(0.056, 10, 10),
+      smoothSkinMat
+    );
+    ear.scale.set(0.55, 1.12, 0.82);
+    ear.position.set(side * 0.262, -0.02, 0.0);
+    headGroup.add(ear);
+  });
+
+  // Cute 3D Nose, Rosy Cheek Blushes & Confident Smile (Clearly on Front Face at z = 0.236~0.248!)
   const nose = new THREE.Mesh(
-    new THREE.OctahedronGeometry(0.038, 0),
-    mats.skinTone
+    new THREE.SphereGeometry(0.028, 10, 10),
+    smoothSkinMat
   );
-  nose.scale.set(0.85, 0.85, 1.3);
-  nose.position.set(0, -0.035, 0.265);
+  nose.position.set(0, -0.028, 0.242);
   headGroup.add(nose);
 
-  // Cute Confident Smile Line
+  [-1, 1].forEach((side) => {
+    const blush = new THREE.Mesh(
+      new THREE.CircleGeometry(0.036, 12),
+      blushMat
+    );
+    blush.scale.set(1.35, 0.78, 1);
+    blush.position.set(side * 0.142, -0.052, 0.222);
+    blush.rotation.y = side * 0.32;
+    headGroup.add(blush);
+  });
+
   const smileBar = new THREE.Mesh(
-    new THREE.BoxGeometry(0.08, 0.018, 0.02),
+    new THREE.BoxGeometry(0.068, 0.015, 0.016),
     browMat
   );
-  smileBar.position.set(0, -0.115, 0.25);
-  smileBar.rotation.z = 0.08;
+  smileBar.position.set(0, -0.095, 0.232);
+  smileBar.rotation.z = 0.06;
   headGroup.add(smileBar);
 
-  // Large Expressive Stylized Eyes (Exact Reference Image 1 proportions!)
+  // Expressive Large Anime Eyes with Colored Iris, Dark Pupil, Dual Catchlight Sparks & Eyelashes
+  // Placed cleanly outside the front facial surface (z = 0.228) so they are 100% visible!
   [-1, 1].forEach((side) => {
     const eyeGroup = new THREE.Group();
-    eyeGroup.position.set(side * 0.13, -0.01, 0.242);
-    eyeGroup.rotation.y = side * 0.22;
+    eyeGroup.position.set(side * 0.102, 0.005, 0.226);
+    eyeGroup.rotation.y = side * 0.24;
 
-    // Wide White Sclera Plate
     const sclera = new THREE.Mesh(
-      new THREE.BoxGeometry(0.135, 0.115, 0.024),
+      new THREE.BoxGeometry(0.105, 0.092, 0.016),
       eyeWhiteMat
     );
-    eyeGroup.add(sclera);
-
-    // Big Dark-Indigo Iris/Pupil
+    const iris = new THREE.Mesh(
+      new THREE.BoxGeometry(0.072, 0.082, 0.02),
+      eyeIrisMat
+    );
+    iris.position.set(side * -0.006, 0.0, 0.003);
     const pupil = new THREE.Mesh(
-      new THREE.BoxGeometry(0.088, 0.098, 0.03),
+      new THREE.BoxGeometry(0.042, 0.052, 0.024),
       eyePupilMat
     );
-    pupil.position.set(side * -0.012, 0.005, 0.005);
-    eyeGroup.add(pupil);
-
-    // Eye Catchlight Spark
-    const spark = new THREE.Mesh(
-      new THREE.BoxGeometry(0.028, 0.028, 0.034),
+    pupil.position.set(side * -0.006, -0.002, 0.005);
+    const sparkBig = new THREE.Mesh(
+      new THREE.BoxGeometry(0.024, 0.024, 0.028),
       eyeWhiteMat
     );
-    spark.position.set(side * -0.028, 0.026, 0.008);
-    eyeGroup.add(spark);
+    sparkBig.position.set(side * -0.02, 0.022, 0.007);
+    const sparkSmall = new THREE.Mesh(
+      new THREE.BoxGeometry(0.013, 0.013, 0.028),
+      eyeWhiteMat
+    );
+    sparkSmall.position.set(side * 0.014, -0.02, 0.007);
 
-    // Bold Angled Eyebrow
-    const brow = new THREE.Mesh(
-      new THREE.BoxGeometry(0.155, 0.038, 0.036),
+    // Upper Eyelash & Expressive Brow
+    const upperLash = new THREE.Mesh(
+      new THREE.BoxGeometry(0.114, 0.022, 0.024),
       browMat
     );
-    brow.position.set(0, 0.08, 0.014);
-    brow.rotation.z = side * 0.22;
-    eyeGroup.add(brow);
+    upperLash.position.set(0, 0.044, 0.005);
+    upperLash.rotation.z = side * -0.06;
 
+    const brow = new THREE.Mesh(
+      new THREE.BoxGeometry(0.118, 0.024, 0.024),
+      browMat
+    );
+    brow.position.set(0, 0.076, 0.006);
+    brow.rotation.z = side * 0.12;
+
+    eyeGroup.add(sclera, iris, pupil, sparkBig, sparkSmall, upperLash, brow);
     headGroup.add(eyeGroup);
   });
 
   // ============================================================================
-  // 4. SCULPTED FACETED HELMET-BOB HAIR & FOREHEAD DIAMOND CREST (Ref Image 1)
+  // 4. SCULPTED MULTI-LAYERED HAIRSTYLES & HEADGEAR (NEVER COVERS THE FACE!)
   // ============================================================================
   const hairMainMat =
     characterId === 'luna_cyber'
@@ -367,174 +591,232 @@ export function createPlayerModel(
       ? riderYellowMat
       : characterId === 'suited_worker'
       ? suitCharcoalMat
-      : mats.playerAccentOrange;
+      : mats.buildingRoofDark;
 
-  // Top & Back Faceted Bob-Hair Crown (Solid Icosahedron cap)
+  // Open Upper-Back Hair Dome (tilted back so the entire front face below y = +0.11 is completely open!)
   const hairCrown = new THREE.Mesh(
-    new THREE.IcosahedronGeometry(0.335, 1),
+    new THREE.SphereGeometry(0.268, 20, 14, 0, Math.PI * 2, 0, Math.PI * 0.56),
     hairMainMat
   );
-  hairCrown.scale.set(1.12, 0.96, 1.04);
-  hairCrown.position.set(0, 0.06, -0.035);
+  hairCrown.scale.set(1.08, 1.0, 1.04);
+  hairCrown.position.set(0, 0.03, -0.02);
+  hairCrown.rotation.x = -0.32;
   hairCrown.castShadow = true;
   headGroup.add(hairCrown);
 
-  // Back Hair Bob Skirt (frames the back of the neck cleanly)
-  const hairBackSkirt = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.32, 0.36, 0.26, 7),
+  // Sculpted Back Hair Volume (covers the back of the skull cleanly for third-person view)
+  const backHairVolume = new THREE.Mesh(
+    new THREE.SphereGeometry(0.255, 16, 12),
     hairMainMat
   );
-  hairBackSkirt.scale.set(1.08, 1.0, 0.72);
-  hairBackSkirt.position.set(0, -0.04, -0.09);
-  hairBackSkirt.castShadow = true;
-  headGroup.add(hairBackSkirt);
+  backHairVolume.scale.set(1.06, 0.96, 0.65);
+  backHairVolume.position.set(0, -0.01, -0.11);
+  backHairVolume.castShadow = true;
+  headGroup.add(backHairVolume);
 
-  // Left & Right Angled Side Hair Wings (Reference Image 1 signature bob-cut side locks!)
+  // Sculpted Parted Front Bangs (frames the forehead above the eyebrows at y = +0.145)
   [-1, 1].forEach((side) => {
-    const sideWingGroup = new THREE.Group();
-    sideWingGroup.position.set(side * 0.29, -0.02, 0.04);
-    sideWingGroup.rotation.z = side * 0.16;
-    sideWingGroup.rotation.y = side * 0.25;
-
-    const upperWing = new THREE.Mesh(
-      new THREE.BoxGeometry(0.11, 0.34, 0.26),
+    const bangLock = new THREE.Mesh(
+      new THREE.ConeGeometry(0.088, 0.18, 6),
       hairMainMat
     );
-    upperWing.castShadow = true;
-    sideWingGroup.add(upperWing);
-
-    // Tapered sharp inward-pointing lock below the cheek
-    const lowerTip = new THREE.Mesh(
-      new THREE.OctahedronGeometry(0.13, 0),
-      hairMainMat
-    );
-    lowerTip.scale.set(0.45, 1.35, 0.85);
-    lowerTip.position.set(side * -0.03, -0.18, 0.04);
-    lowerTip.rotation.z = side * -0.35;
-    lowerTip.castShadow = true;
-    sideWingGroup.add(lowerTip);
-
-    headGroup.add(sideWingGroup);
+    bangLock.scale.set(1.1, 1.0, 0.48);
+    bangLock.position.set(side * 0.095, 0.145, 0.215);
+    bangLock.rotation.z = side * 0.42;
+    bangLock.rotation.x = -0.18;
+    headGroup.add(bangLock);
   });
 
-  // Front Brow Bangs
-  const frontBangs = new THREE.Mesh(
-    new THREE.BoxGeometry(0.48, 0.13, 0.18),
-    hairMainMat
-  );
-  frontBangs.position.set(0, 0.19, 0.18);
-  frontBangs.rotation.x = 0.18;
-  frontBangs.castShadow = true;
-  headGroup.add(frontBangs);
-
-  // Iconic Forehead White Diamond Gem (Reference Image 1 centerpiece!)
-  const foreheadDiamond = new THREE.Mesh(
-    new THREE.OctahedronGeometry(0.12, 0),
-    mats.lunaDiamondWhite
-  );
-  foreheadDiamond.scale.set(0.82, 1.25, 0.45);
-  foreheadDiamond.position.set(0, 0.19, 0.295);
-  headGroup.add(foreheadDiamond);
-
-  // Character-Specific Extra Head Accents
-  if (characterId === 'flash_rider') {
-    const stem = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.02, 0.02, 0.14, 6),
-      mats.playerAccentOrange
+  if (characterId === 'luna_cyber') {
+    // Forehead White Diamond Crest (Reference Image 1 signature detail)
+    const foreheadGem = new THREE.Mesh(
+      new THREE.OctahedronGeometry(0.048, 0),
+      mats.lunaDiamondWhite
     );
-    stem.position.set(0, 0.4, 0);
-    const blade = new THREE.Mesh(
-      new THREE.BoxGeometry(0.36, 0.025, 0.055),
-      mats.playerAccentOrange
-    );
-    blade.position.set(0, 0.47, 0);
-    headGroup.add(stem, blade);
-  } else if (characterId === 'street_kid') {
+    foreheadGem.scale.set(0.85, 1.25, 0.45);
+    foreheadGem.position.set(0, 0.14, 0.242);
+    headGroup.add(foreheadGem);
+
+    // Cyber Cat-Ear Tactical Headset + Twin Side Hair Locks + Back Twin-Tails!
     [-1, 1].forEach((side) => {
-      const cup = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.09, 0.09, 0.07, 8).rotateZ(Math.PI / 2),
+      const catEar = new THREE.Mesh(
+        new THREE.ConeGeometry(0.095, 0.19, 4),
+        mats.buildingRoofDark
+      );
+      catEar.position.set(side * 0.2, 0.31, 0.01);
+      catEar.rotation.z = side * -0.28;
+      const earGlow = new THREE.Mesh(
+        new THREE.ConeGeometry(0.055, 0.115, 4),
+        neonCyanGlowMat
+      );
+      earGlow.position.set(side * 0.2, 0.3, 0.035);
+      earGlow.rotation.z = side * -0.28;
+      headGroup.add(catEar, earGlow);
+
+      // Cheek-framing side hair lock
+      const sideLock = new THREE.Mesh(
+        new THREE.ConeGeometry(0.068, 0.28, 8),
+        mats.lunaHairViolet
+      );
+      sideLock.rotation.z = Math.PI + side * -0.15;
+      sideLock.position.set(side * 0.245, -0.05, 0.08);
+      headGroup.add(sideLock);
+
+      // Dynamic Back Twin-Tails (visible from third-person rear camera!)
+      const twinTail = new THREE.Mesh(
+        new THREE.ConeGeometry(0.082, 0.38, 8),
+        mats.lunaHairViolet
+      );
+      twinTail.rotation.x = Math.PI * 0.86;
+      twinTail.rotation.z = side * -0.25;
+      twinTail.position.set(side * 0.19, -0.08, -0.24);
+      twinTail.castShadow = true;
+      headGroup.add(twinTail);
+    });
+  } else if (characterId === 'street_kid') {
+    // Backwards Street Baseball Cap + Glowing Cyan Over-Ear DJ Headphones
+    const capDome = new THREE.Mesh(
+      new THREE.SphereGeometry(0.282, 16, 10, 0, Math.PI * 2, 0, Math.PI * 0.48),
+      mats.playerAccentOrange
+    );
+    capDome.position.set(0, 0.06, -0.01);
+    capDome.rotation.x = -0.12;
+    const backwardsBrim = new THREE.Mesh(
+      new THREE.BoxGeometry(0.28, 0.03, 0.2),
+      mats.tireRubber
+    );
+    backwardsBrim.position.set(0, 0.08, -0.32);
+    backwardsBrim.rotation.x = -0.15;
+    headGroup.add(capDome, backwardsBrim);
+
+    [-1, 1].forEach((side) => {
+      const earCup = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.088, 0.088, 0.065, 12).rotateZ(Math.PI / 2),
         mats.lunaCyanArmor
       );
-      cup.position.set(side * 0.36, -0.01, 0.05);
-      headGroup.add(cup);
+      earCup.position.set(side * 0.285, -0.01, 0.01);
+      headGroup.add(earCup);
     });
+  } else if (characterId === 'flash_rider') {
+    // Aerodynamic Yellow Rider Helmet + Tinted Flip-Up Visor + Cute Top Rotor
+    const helmetVisor = new THREE.Mesh(
+      new THREE.BoxGeometry(0.44, 0.095, 0.1),
+      mats.carGlass
+    );
+    helmetVisor.position.set(0, 0.135, 0.22);
+    helmetVisor.rotation.x = -0.15;
+    const stem = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.02, 0.02, 0.12, 8),
+      mats.playerAccentOrange
+    );
+    stem.position.set(0, 0.34, 0);
+    const rotorBlade = new THREE.Mesh(
+      new THREE.BoxGeometry(0.36, 0.022, 0.055),
+      mats.playerAccentOrange
+    );
+    rotorBlade.name = 'helmetRotor';
+    rotorBlade.position.set(0, 0.4, 0);
+    headGroup.add(helmetVisor, stem, rotorBlade);
   } else if (characterId === 'suited_worker') {
+    // Gold-Rimmed Glasses + Bridge clearly framed on the eyes
     const frameMat = new THREE.MeshBasicMaterial({ color: 0xfbbf24 });
     [-1, 1].forEach((side) => {
-      const glassFrame = new THREE.Mesh(
-        new THREE.BoxGeometry(0.15, 0.025, 0.025),
+      const lensRim = new THREE.Mesh(
+        new THREE.RingGeometry(0.05, 0.066, 16),
         frameMat
       );
-      glassFrame.position.set(side * 0.13, 0.05, 0.265);
-      headGroup.add(glassFrame);
+      lensRim.position.set(side * 0.104, 0.006, 0.246);
+      lensRim.rotation.y = side * 0.2;
+      headGroup.add(lensRim);
     });
+    const bridge = new THREE.Mesh(
+      new THREE.BoxGeometry(0.072, 0.016, 0.018),
+      frameMat
+    );
+    bridge.position.set(0, 0.014, 0.248);
+    headGroup.add(bridge);
   }
 
   // ============================================================================
-  // 5. FACETED CHIBI ARMS, HEXAGONAL WRIST CUFFS & HANDS (Reference Image 1)
+  // 5. SLEEVED ARMS, WRISTBANDS & HANDS
   // ============================================================================
-  const buildChibiArm = (isLeft: boolean) => {
+  const buildArm = (isLeft: boolean) => {
     const side = isLeft ? -1 : 1;
     const armGroup = new THREE.Group();
     armGroup.name = isLeft ? 'leftArm' : 'rightArm';
-    armGroup.position.set(side * 0.26, 0.98, 0);
-    armGroup.rotation.z = side * -0.22;
+    armGroup.position.set(side * 0.27, 1.0, 0);
+    armGroup.rotation.z = side * -0.16;
 
-    const armMat =
-      characterId === 'suited_worker' ? suitCharcoalMat : mats.skinTone;
-
-    // Tapered low-poly arm shaft
-    const armShaft = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.078, 0.065, 0.38, 6),
-      armMat
+    // Upper jacket sleeve
+    const upperSleeve = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.084, 0.072, 0.22, 10),
+      primaryTopMat
     );
-    armShaft.position.y = -0.18;
-    armShaft.castShadow = true;
-    armGroup.add(armShaft);
+    upperSleeve.position.y = -0.1;
+    upperSleeve.castShadow = true;
+    armGroup.add(upperSleeve);
 
-    // Chunky Turquoise-Cyan Hexagonal Wrist Cuff (Exact Reference Image 1 feature!)
-    const cuff = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.098, 0.098, 0.085, 6),
-      trimAccentMat
+    // Forearm
+    const forearmMat =
+      characterId === 'suited_worker' || characterId === 'flash_rider'
+        ? primaryTopMat
+        : smoothSkinMat;
+    const forearm = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.068, 0.058, 0.2, 10),
+      forearmMat
     );
-    cuff.position.y = -0.34;
-    cuff.castShadow = true;
-    armGroup.add(cuff);
+    forearm.position.y = -0.28;
+    forearm.castShadow = true;
+    armGroup.add(forearm);
 
-    // Low-Poly Hand + Thumb Wedge
+    // Smart Watch / Wristband
+    const wristband = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.07, 0.07, 0.052, 10),
+      characterId === 'luna_cyber' ? neonCyanGlowMat : mats.tireRubber
+    );
+    wristband.position.y = -0.35;
+    armGroup.add(wristband);
+
+    // Hand
     const palm = new THREE.Mesh(
-      new THREE.BoxGeometry(0.095, 0.115, 0.085),
-      mats.skinTone
+      new THREE.SphereGeometry(0.06, 10, 10),
+      smoothSkinMat
     );
     palm.position.y = -0.42;
     palm.castShadow = true;
     armGroup.add(palm);
 
-    const thumb = new THREE.Mesh(
-      new THREE.BoxGeometry(0.042, 0.065, 0.045),
-      mats.skinTone
-    );
-    thumb.position.set(side * 0.058, -0.41, 0.035);
-    thumb.rotation.z = side * -0.45;
-    armGroup.add(thumb);
-
     if (!isLeft && characterId === 'suited_worker') {
       const coffeeCup = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.055, 0.042, 0.14, 8),
-        mats.patrolWhite
+        new THREE.CylinderGeometry(0.052, 0.04, 0.13, 10),
+        sneakerWhiteMat
       );
-      coffeeCup.position.set(0, -0.46, 0.08);
-      armGroup.add(coffeeCup);
+      coffeeCup.position.set(0, -0.46, 0.075);
+      const sleeve = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.054, 0.048, 0.05, 10),
+        mats.crateWood
+      );
+      sleeve.position.set(0, -0.46, 0.075);
+      armGroup.add(coffeeCup, sleeve);
     }
 
     return armGroup;
   };
 
-  const leftArm = buildChibiArm(true);
-  const rightArm = buildChibiArm(false);
+  const leftArm = buildArm(true);
+  const rightArm = buildArm(false);
   bodyGroup.add(leftArm, rightArm);
 
-  return { group, bodyGroup, headGroup, leftArm, rightArm, leftLeg, rightLeg };
+  return {
+    group,
+    bodyGroup,
+    headGroup,
+    leftArm,
+    rightArm,
+    leftLeg,
+    rightLeg,
+    scarfGroup,
+  };
 }
 
 /**
@@ -1044,7 +1326,6 @@ export function createOfficerModel(
     coneAngleRad
   );
   sectorGeo.rotateX(-Math.PI / 2);
-  sectorGeo.rotateY(Math.PI);
 
   const visionConeMat = new THREE.MeshBasicMaterial({
     color: 0x38bdf8,
@@ -1096,11 +1377,15 @@ export interface PatrolCarRig {
   sirenPointLight: THREE.PointLight;
   carVisionConeMesh: THREE.Mesh;
   carVisionConeMat: THREE.MeshBasicMaterial;
+  radarScannerGroup: THREE.Group;
+  directionDetectorGroup: THREE.Group;
 }
 
 /**
  * Builds the "参保直通车" Patrol Van using 100% solid Box/Cylinder primitives,
- * with a 30m+ Long-Range Vision Cone and a 3D Dent/Crater group when hit by a stone/wrench!
+ * with a Ground Direction Detector Ring + Chevrons, a Roof Rotating Radar Scanner,
+ * a 30m+ Long-Range Forward Vision Cone attached right at the front bumper,
+ * and a 3D Dent/Crater group when hit by a stone/wrench!
  */
 export function createPatrolCarModel(mats: MaterialLibrary): PatrolCarRig {
   const group = new THREE.Group();
@@ -1117,6 +1402,43 @@ export function createPatrolCarModel(mats: MaterialLibrary): PatrolCarRig {
   carShadow.rotation.x = -Math.PI / 2;
   carShadow.position.y = 0.03;
   group.add(carShadow);
+
+  // ============================================================================
+  // 0. 3D GROUND DIRECTION DETECTOR RING & FORWARD HEADING ARROWS AROUND VAN
+  // ============================================================================
+  const directionDetectorGroup = new THREE.Group();
+  directionDetectorGroup.name = 'directionDetectorGroup';
+  group.add(directionDetectorGroup);
+
+  const chassisRingMat = new THREE.MeshBasicMaterial({
+    color: 0x38bdf8,
+    transparent: true,
+    opacity: 0.72,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+  });
+  const chassisRingGeo = new THREE.RingGeometry(3.15, 3.38, 36);
+  chassisRingGeo.rotateX(-Math.PI / 2);
+  const chassisRing = new THREE.Mesh(chassisRingGeo, chassisRingMat);
+  chassisRing.scale.set(0.68, 1, 1.05);
+  chassisRing.position.set(0, 0.045, 0);
+  directionDetectorGroup.add(chassisRing);
+
+  const forwardBeaconMat = new THREE.MeshBasicMaterial({
+    color: 0xfacc15,
+    transparent: true,
+    opacity: 0.9,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+  });
+  // Immediate front bumper direction chevrons (+Z heading) so the van's forward direction is always unmistakable!
+  [3.35, 4.35].forEach((zPos, idx) => {
+    const chevGeo = new THREE.ConeGeometry(idx === 0 ? 0.55 : 0.72, idx === 0 ? 0.85 : 1.1, 3);
+    chevGeo.rotateX(Math.PI / 2);
+    const chev = new THREE.Mesh(chevGeo, forwardBeaconMat);
+    chev.position.set(0, 0.055, zPos);
+    directionDetectorGroup.add(chev);
+  });
 
   // 1. Solid Lower Navy Chassis
   const lowerChassis = new THREE.Mesh(
@@ -1154,7 +1476,6 @@ export function createPatrolCarModel(mats: MaterialLibrary): PatrolCarRig {
   group.add(dentDamageGroup);
 
   [-1, 1].forEach((side) => {
-    // Crushed dark metal crater on van side
     const crater = new THREE.Mesh(
       new THREE.CylinderGeometry(0.48, 0.28, 0.18, 7).rotateZ(Math.PI / 2),
       mats.tireRubber
@@ -1163,7 +1484,6 @@ export function createPatrolCarModel(mats: MaterialLibrary): PatrolCarRig {
     crater.rotation.x = 0.3;
     dentDamageGroup.add(crater);
 
-    // Bent metallic shards & orange impact sparks
     for (let k = 0; k < 4; k++) {
       const spark = new THREE.Mesh(
         new THREE.OctahedronGeometry(0.14, 0),
@@ -1245,6 +1565,28 @@ export function createPatrolCarModel(mats: MaterialLibrary): PatrolCarRig {
   roofBillboard.position.set(0, 2.38, -0.2);
   group.add(roofBillboard);
 
+  // 3D Roof Rotating Direction & Radar Detector Dish ("radarScannerGroup")
+  const radarScannerGroup = new THREE.Group();
+  radarScannerGroup.name = 'radarScannerGroup';
+  radarScannerGroup.position.set(0, 2.15, -1.55);
+  const radarPedestal = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.18, 0.24, 0.25, 10),
+    mats.tireRubber
+  );
+  radarPedestal.position.y = 0.12;
+  const radarBar = new THREE.Mesh(
+    new THREE.BoxGeometry(0.95, 0.12, 0.18),
+    mats.lunaCyanArmor
+  );
+  radarBar.position.y = 0.28;
+  const radarTip = new THREE.Mesh(
+    new THREE.ConeGeometry(0.12, 0.32, 6).rotateX(Math.PI / 2),
+    mats.sirenRed
+  );
+  radarTip.position.set(0, 0.28, 0.24);
+  radarScannerGroup.add(radarPedestal, radarBar, radarTip);
+  group.add(radarScannerGroup);
+
   // 4 Solid Low-Poly Wheels
   const wheelPositions: [number, number, number][] = [
     [-1.32, 0.45, 1.65],
@@ -1286,7 +1628,7 @@ export function createPatrolCarModel(mats: MaterialLibrary): PatrolCarRig {
   sirenPointLight.position.set(0, 2.55, 0.85);
   group.add(sirenPointLight);
 
-  // Forward Long-Range Radar & Headlight Vision Cone (30m base radius, much farther than Officer's 16m!)
+  // Forward Long-Range Radar & Direction Detector Cone (+Z forward, 30m base radius, attached right at front bumper z = 2.55!)
   const carConeRadius = 30.0;
   const carConeAngleRad = THREE.MathUtils.degToRad(102);
   const carSectorGeo = new THREE.CircleGeometry(
@@ -1296,17 +1638,63 @@ export function createPatrolCarModel(mats: MaterialLibrary): PatrolCarRig {
     carConeAngleRad
   );
   carSectorGeo.rotateX(-Math.PI / 2);
-  carSectorGeo.rotateY(Math.PI);
 
   const carVisionConeMat = new THREE.MeshBasicMaterial({
-    color: 0xfacc15,
+    color: 0x38bdf8,
     transparent: true,
-    opacity: 0.16,
+    opacity: 0.2,
     depthWrite: false,
     side: THREE.DoubleSide,
   });
   const carVisionConeMesh = new THREE.Mesh(carSectorGeo, carVisionConeMat);
-  carVisionConeMesh.position.set(0, 0.05, 1.8);
+  carVisionConeMesh.position.set(0, 0.06, 2.55);
+
+  // Add Concentric Forward Radar Scan Arcs & Bright Direction Chevron Arrows inside carVisionConeMesh!
+  const radarArcMat = new THREE.MeshBasicMaterial({
+    color: 0xfef08a,
+    transparent: true,
+    opacity: 0.48,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+  });
+  [6.0, 13.0, 21.0, 28.5].forEach((r) => {
+    const arcGeo = new THREE.RingGeometry(
+      r - 0.18,
+      r + 0.18,
+      28,
+      1,
+      -Math.PI / 2 - carConeAngleRad / 2,
+      carConeAngleRad
+    );
+    arcGeo.rotateX(-Math.PI / 2);
+    const arcMesh = new THREE.Mesh(arcGeo, radarArcMat);
+    arcMesh.position.y = 0.01;
+    carVisionConeMesh.add(arcMesh);
+  });
+
+  // Forward Direction Arrow Shaft & Multi-Chevron Heads (+Z heading detector right in front of car)
+  const dirArrowMat = new THREE.MeshBasicMaterial({
+    color: 0xf97316,
+    transparent: true,
+    opacity: 0.78,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+  });
+  const arrowShaftGeo = new THREE.PlaneGeometry(0.42, 11.0);
+  arrowShaftGeo.rotateX(-Math.PI / 2);
+  const arrowShaft = new THREE.Mesh(arrowShaftGeo, dirArrowMat);
+  arrowShaft.position.set(0, 0.015, 6.2);
+  carVisionConeMesh.add(arrowShaft);
+
+  [4.5, 8.5, 12.5].forEach((zOff, idx) => {
+    const arrowHeadGeo = new THREE.CircleGeometry(1.1 + idx * 0.2, 3);
+    arrowHeadGeo.rotateZ(-Math.PI / 6);
+    arrowHeadGeo.rotateX(-Math.PI / 2);
+    const arrowHead = new THREE.Mesh(arrowHeadGeo, dirArrowMat);
+    arrowHead.position.set(0, 0.018, zOff);
+    carVisionConeMesh.add(arrowHead);
+  });
+
   group.add(carVisionConeMesh);
 
   return {
@@ -1320,6 +1708,8 @@ export function createPatrolCarModel(mats: MaterialLibrary): PatrolCarRig {
     sirenPointLight,
     carVisionConeMesh,
     carVisionConeMat,
+    radarScannerGroup,
+    directionDetectorGroup,
   };
 }
 
@@ -2991,6 +3381,180 @@ export function createCountryShedHidingModel(mats: MaterialLibrary): THREE.Group
   group.add(ring);
 
   return group;
+}
+
+export interface StreetMonitorRig {
+  group: THREE.Group;
+  cameraHead: THREE.Group;
+  statusLed: THREE.Mesh;
+  scanConeMesh: THREE.Mesh;
+  scanConeMat: THREE.MeshBasicMaterial;
+  scanBeamMesh: THREE.Mesh;
+}
+
+/**
+ * Surveillance Monitor / Camera Tripod (参保智能街区监控侦测器)
+ * Placed periodically by the Patrol Car. Features a motorized rotating dome camera,
+ * pulsing status LED, and a 7.5m sweeping infrared detection sector.
+ */
+export function createStreetMonitorModel(mats: MaterialLibrary): StreetMonitorRig {
+  const group = new THREE.Group();
+  group.name = 'StreetSurveillanceMonitor';
+
+  // Ground shadow
+  const shadow = new THREE.Mesh(
+    new THREE.CircleGeometry(0.75, 16),
+    mats.contactShadowMat
+  );
+  shadow.rotation.x = -Math.PI / 2;
+  shadow.position.y = 0.02;
+  group.add(shadow);
+
+  // Triangular metallic tripod legs
+  const tripodMat = new THREE.MeshStandardMaterial({
+    color: 0x1e293b,
+    roughness: 0.5,
+    metalness: 0.6,
+    flatShading: true,
+  });
+  for (let i = 0; i < 3; i++) {
+    const angle = (i * Math.PI * 2) / 3;
+    const leg = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.03, 0.035, 0.95, 6),
+      tripodMat
+    );
+    leg.position.set(Math.sin(angle) * 0.28, 0.42, Math.cos(angle) * 0.28);
+    leg.rotation.z = Math.cos(angle) * 0.32;
+    leg.rotation.x = -Math.sin(angle) * 0.32;
+    leg.castShadow = true;
+    group.add(leg);
+
+    // Rubber foot
+    const foot = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.05, 0.05, 0.06, 6),
+      mats.tireRubber
+    );
+    foot.position.set(Math.sin(angle) * 0.45, 0.03, Math.cos(angle) * 0.45);
+    group.add(foot);
+  }
+
+  // Central vertical mast
+  const mast = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.045, 0.055, 1.25, 8),
+    tripodMat
+  );
+  mast.position.y = 0.85;
+  mast.castShadow = true;
+  group.add(mast);
+
+  // Control box / battery unit
+  const controlBox = new THREE.Mesh(
+    new THREE.BoxGeometry(0.24, 0.32, 0.22),
+    mats.patrolNavy
+  );
+  controlBox.position.set(0, 0.72, 0);
+  controlBox.castShadow = true;
+  group.add(controlBox);
+
+  // Blinking status LED on box
+  const ledMat = new THREE.MeshBasicMaterial({ color: 0x38bdf8 });
+  const statusLed = new THREE.Mesh(
+    new THREE.SphereGeometry(0.035, 8, 8),
+    ledMat
+  );
+  statusLed.position.set(0, 0.78, 0.12);
+  group.add(statusLed);
+
+  // Swiveling Camera Head
+  const cameraHead = new THREE.Group();
+  cameraHead.position.set(0, 1.48, 0);
+  group.add(cameraHead);
+
+  // Motorized mount base
+  const motorBase = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.09, 0.09, 0.12, 10),
+    tripodMat
+  );
+  motorBase.position.y = -0.06;
+  cameraHead.add(motorBase);
+
+  // Camera housing
+  const camBody = new THREE.Mesh(
+    new THREE.BoxGeometry(0.18, 0.16, 0.28),
+    mats.patrolWhite
+  );
+  camBody.position.set(0, 0.06, 0.04);
+  camBody.castShadow = true;
+  cameraHead.add(camBody);
+
+  // Front camera lens & IR ring
+  const lens = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.06, 0.06, 0.08, 12).rotateX(Math.PI / 2),
+    mats.tireRubber
+  );
+  lens.position.set(0, 0.06, 0.2);
+  const irRing = new THREE.Mesh(
+    new THREE.TorusGeometry(0.052, 0.012, 8, 16),
+    new THREE.MeshBasicMaterial({ color: 0xef4444 })
+  );
+  irRing.position.set(0, 0.06, 0.24);
+  cameraHead.add(lens, irRing);
+
+  // Antenna
+  const antenna = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.01, 0.015, 0.32, 4),
+    tripodMat
+  );
+  antenna.position.set(0.06, 0.26, -0.05);
+  cameraHead.add(antenna);
+
+  // 7.5m sweeping detection ground sector (+Z forward aligned with lens)
+  const scanRadius = 7.5;
+  const scanAngleRad = THREE.MathUtils.degToRad(72);
+  const sectorGeo = new THREE.CircleGeometry(
+    scanRadius,
+    24,
+    -Math.PI / 2 - scanAngleRad / 2,
+    scanAngleRad
+  );
+  sectorGeo.rotateX(-Math.PI / 2);
+
+  const scanConeMat = new THREE.MeshBasicMaterial({
+    color: 0x38bdf8,
+    transparent: true,
+    opacity: 0.18,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+  });
+  const scanConeMesh = new THREE.Mesh(sectorGeo, scanConeMat);
+  scanConeMesh.position.y = 0.05;
+  cameraHead.add(scanConeMesh);
+
+  // Soft vertical scanning laser plane
+  const beamGeo = new THREE.PlaneGeometry(0.3, scanRadius);
+  beamGeo.rotateX(-Math.PI / 2);
+  beamGeo.translate(0, 0, scanRadius * 0.5);
+  const scanBeamMesh = new THREE.Mesh(
+    beamGeo,
+    new THREE.MeshBasicMaterial({
+      color: 0x38bdf8,
+      transparent: true,
+      opacity: 0.22,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+    })
+  );
+  scanBeamMesh.position.y = 0.08;
+  cameraHead.add(scanBeamMesh);
+
+  return {
+    group,
+    cameraHead,
+    statusLed,
+    scanConeMesh,
+    scanConeMat,
+    scanBeamMesh,
+  };
 }
 
 

@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
-import { PatrolAndAISystem } from './ai/PatrolAndAI';
+import { OfficerId, PatrolAndAISystem } from './ai/PatrolAndAI';
 import { soundFX } from './core/AudioSystem';
 import {
   EXTRACTION_POINT,
@@ -51,7 +51,7 @@ interface ActiveProjectile {
   startPos: THREE.Vector3;
   endPos: THREE.Vector3;
   targetType: 'officer' | 'car';
-  officerId: 'A' | 'B' | 'C' | null;
+  officerId: OfficerId | null;
   targetName: string;
   elapsed: number;
   duration: number;
@@ -107,6 +107,23 @@ interface HudState {
   campExposurePct: number;
   missionZones: string[];
   visionBoostCount: number;
+  // 投掷有效射程检测与超距拦截提示
+  throwWarningMessage: string | null;
+  targetInRange: boolean;
+  targetDistance: number;
+  targetMaxRange: number;
+  nearestTargetName: string | null;
+  // 参保直通车发现玩家紧急下放保安 20s 地面搜捕状态
+  deployedOfficerRemainingSec: number;
+  isOfficerDeployedFromCar: boolean;
+  // 电话亭最多隐蔽 10 秒状态
+  isHidingInBooth: boolean;
+  boothHidingRemainingSec: number;
+  // 参保直通车方向检测器状态 (相对方位角、距离、行驶朝向、视野锁定)
+  carBearingDeg: number;
+  carDistance: number;
+  carHeadingLabel: string;
+  carSeesPlayer: boolean;
 }
 
 const _camDesiredPos = new THREE.Vector3();
@@ -114,6 +131,8 @@ const _camLookAt = new THREE.Vector3();
 const _forwardDir = new THREE.Vector3();
 const _rightDir = new THREE.Vector3();
 const _moveInput = new THREE.Vector3();
+const _toTarget = new THREE.Vector3();
+const _projTargetPos = new THREE.Vector3();
 
 export default function App() {
   const canvasMountRef = useRef<HTMLDivElement | null>(null);
@@ -182,11 +201,26 @@ export default function App() {
     campExposurePct: 0,
     missionZones: MISSION_ITEMS.map((m) => m.zoneName),
     visionBoostCount: 0,
+    throwWarningMessage: null,
+    targetInRange: false,
+    targetDistance: 99.9,
+    targetMaxRange: 22.0,
+    nearestTargetName: null,
+    deployedOfficerRemainingSec: 0,
+    isOfficerDeployedFromCar: false,
+    isHidingInBooth: false,
+    boothHidingRemainingSec: 0,
+    carBearingDeg: 0,
+    carDistance: 32,
+    carHeadingLabel: '向东巡航',
+    carSeesPlayer: false,
   });
 
   const simRef = useRef({
     phase: 'title' as GamePhase,
+    phaseBeforePause: 'playing' as 'playing' | 'strolling',
     stageId: 'stage_1' as StageId,
+    currentActiveStageId: 'stage_1' as StageId,
     stageSwapRequested: true,
     playstyle: 'balanced' as PlaystyleModeId,
     characterId: 'luna_cyber' as PlayerCharacterId,
@@ -206,6 +240,7 @@ export default function App() {
     stamina: 100,
     isCrouching: false,
     activeHidingSpot: null as HidingSpot | null,
+    boothHidingTimer: 0,
     timeRemaining: PLAYSTYLE_MODES.balanced.timeLimitSec,
     extractionTimer: 0,
     collectedCount: 0,
@@ -219,6 +254,8 @@ export default function App() {
     interactJustPressed: false,
     crouchJustPressed: false,
     throwJustPressed: false,
+    throwWarningMessage: null as string | null,
+    throwWarningTimer: 0,
     // 参保金额累计状态
     contributionAmount: 1280,
     totalHidingSeconds: 0,
@@ -307,10 +344,25 @@ export default function App() {
     }
   }, [phase, exitGamePointerLock]);
 
+  const selectCharacter = useCallback((cId: PlayerCharacterId) => {
+    setCharacterId(cId);
+    simRef.current.characterId = cId;
+    simRef.current.characterSwapRequested = true;
+  }, []);
+
   const startStreetStroll = useCallback(
-    (modeOverride?: PlaystyleModeId, stageOverride?: StageId) => {
+    (
+      modeOverride?: PlaystyleModeId,
+      stageOverride?: StageId,
+      charOverride?: PlayerCharacterId
+    ) => {
       const targetMode = modeOverride || playstyle;
       if (modeOverride) setPlaystyle(modeOverride);
+      if (charOverride) {
+        setCharacterId(charOverride);
+        simRef.current.characterId = charOverride;
+        simRef.current.characterSwapRequested = true;
+      }
       if (stageOverride) {
         setStageId(stageOverride);
         simRef.current.stageId = stageOverride;
@@ -318,6 +370,7 @@ export default function App() {
       }
       simRef.current.playstyle = targetMode;
       simRef.current.resetToStrollRequested = true;
+      simRef.current.phaseBeforePause = 'strolling';
       simRef.current.phase = 'strolling';
       setPhase('strolling');
       setMapExpanded(false);
@@ -328,13 +381,22 @@ export default function App() {
   );
 
   const resumeGameplay = useCallback(() => {
-    simRef.current.phase = 'playing';
-    setPhase('playing');
+    // If a different stage was picked while paused, rebuild and start that stage!
+    if (simRef.current.currentActiveStageId !== stageId) {
+      startStreetStroll(undefined, stageId, characterId);
+      return;
+    }
+    const targetResumePhase = simRef.current.phaseBeforePause || 'playing';
+    simRef.current.phase = targetResumePhase;
+    setPhase(targetResumePhase);
     requestGamePointerLock();
-  }, [requestGamePointerLock]);
+  }, [stageId, characterId, startStreetStroll, requestGamePointerLock]);
 
   const pauseGameplay = useCallback(() => {
     exitGamePointerLock();
+    if (simRef.current.phase === 'strolling' || simRef.current.phase === 'playing') {
+      simRef.current.phaseBeforePause = simRef.current.phase;
+    }
     simRef.current.phase = 'paused';
     setPhase('paused');
   }, [exitGamePointerLock]);
@@ -522,8 +584,8 @@ export default function App() {
     const dirLight = new THREE.DirectionalLight(0xffe8c2, 1.75);
     dirLight.position.set(42, 68, 38);
     dirLight.castShadow = true;
-    dirLight.shadow.mapSize.width = 2048;
-    dirLight.shadow.mapSize.height = 2048;
+    dirLight.shadow.mapSize.width = 1024;
+    dirLight.shadow.mapSize.height = 1024;
     dirLight.shadow.camera.near = 10;
     dirLight.shadow.camera.far = 180;
     const d = 68;
@@ -541,6 +603,24 @@ export default function App() {
     const mats = createMaterialLibrary(renderer);
     let currentBuiltStageId: StageId = simRef.current.stageId;
     let worldData = buildGameWorld(scene, mats, currentBuiltStageId);
+
+    const disposeHierarchy = (obj: THREE.Object3D) => {
+      obj.traverse((child) => {
+        if ((child as THREE.Mesh).isMesh) {
+          const m = child as THREE.Mesh;
+          if (m.geometry) m.geometry.dispose();
+          if (m.material) {
+            if (Array.isArray(m.material)) {
+              m.material.forEach((mat) => {
+                if (mat && !mat.userData?.isSharedMat) mat.dispose();
+              });
+            } else if (!m.material.userData?.isSharedMat) {
+              m.material.dispose();
+            }
+          }
+        }
+      });
+    };
 
     let playerRig: PlayerRig = glbAssetRegistry.instantiatePlayerRigFromGLB(
       mats,
@@ -599,9 +679,11 @@ export default function App() {
       // Dynamically rebuild the 3D Architectural World when switching stages
       // Stage 1: European Rowhouse Commercial Street | Stage 2: Coastal Seaside Town | Stage 3: Countryside Village Street
       if (currentBuiltStageId !== targetStageId) {
+        disposeHierarchy(worldData.worldRootGroup);
         scene.remove(worldData.worldRootGroup);
         worldData = buildGameWorld(scene, mats, targetStageId);
         currentBuiltStageId = targetStageId;
+        simRef.current.currentActiveStageId = targetStageId;
         syncMinimapWorldRefs();
       }
 
@@ -648,9 +730,11 @@ export default function App() {
         ignoreNextMovementSpike = true;
       } else if (
         !isHoldingAltForCursor &&
-        (simRef.current.phase === 'playing' || simRef.current.phase === 'strolling')
+        simRef.current.phase === 'playing'
       ) {
-        // Pressing Esc while pointer-locked exits pointer lock -> automatically pause game!
+        // Pressing Esc while pointer-locked during active gameplay pauses the game.
+        // Note: In 'strolling' (before game formally starts), unlocking pointer will NOT trap the game in paused state!
+        simRef.current.phaseBeforePause = 'playing';
         simRef.current.phase = 'paused';
         setPhase('paused');
       }
@@ -692,23 +776,29 @@ export default function App() {
           ) {
             e.preventDefault();
             simRef.current.resetToStrollRequested = true;
+            simRef.current.phaseBeforePause = 'strolling';
             simRef.current.phase = 'strolling';
             setPhase('strolling');
             lockCanvasPointer();
           }
         } else if (code === 'Escape' || code === 'KeyP') {
-          if (simRef.current.phase === 'playing' || simRef.current.phase === 'strolling') {
+          if (simRef.current.phase === 'playing') {
             isHoldingAltForCursor = false;
             try {
               if (document.pointerLockElement) document.exitPointerLock();
             } catch {
               // ignore
             }
+            simRef.current.phaseBeforePause = 'playing';
             simRef.current.phase = 'paused';
             setPhase('paused');
+          } else if (simRef.current.phase === 'strolling') {
+            // Pressing ESC before game starts (in strolling phase) skips strolling and starts the arrival cutscene + guard deployment!
+            simRef.current.triggerCutsceneRequested = true;
           } else if (simRef.current.phase === 'paused') {
-            simRef.current.phase = 'playing';
-            setPhase('playing');
+            const resumeTarget = simRef.current.phaseBeforePause || 'playing';
+            simRef.current.phase = resumeTarget;
+            setPhase(resumeTarget);
             lockCanvasPointer();
           } else if (simRef.current.phase === 'cutscene') {
             simRef.current.skipCutsceneRequested = true;
@@ -887,7 +977,10 @@ export default function App() {
       simRef.current.hitReactionPopup = null;
       simRef.current.throwJustPressed = false;
 
-      activeProjectiles.forEach((p) => scene.remove(p.mesh));
+      activeProjectiles.forEach((p) => {
+        disposeHierarchy(p.mesh);
+        scene.remove(p.mesh);
+      });
       activeProjectiles.length = 0;
 
       playerRig.group.visible = true;
@@ -908,6 +1001,16 @@ export default function App() {
         t.mesh.visible = true;
       });
 
+      simRef.current.boothHidingTimer = 0;
+      worldData.hidingSpots.forEach((h) => {
+        h.used = false;
+        h.mesh.traverse((child) => {
+          if (child instanceof THREE.Mesh && child.geometry instanceof THREE.RingGeometry) {
+            child.visible = true;
+          }
+        });
+      });
+
       aiSystem.prepareStrollPhase();
     };
 
@@ -920,6 +1023,13 @@ export default function App() {
         sim.snackBoostTimer = Math.max(0, sim.snackBoostTimer - dt);
         if (sim.snackBoostTimer <= 0) {
           sim.lastSnackEatenName = null;
+        }
+      }
+
+      if (sim.throwWarningTimer > 0) {
+        sim.throwWarningTimer = Math.max(0, sim.throwWarningTimer - dt);
+        if (sim.throwWarningTimer <= 0) {
+          sim.throwWarningMessage = null;
         }
       }
 
@@ -984,43 +1094,56 @@ export default function App() {
         sim.throwJustPressed = false;
         if (!sim.activeHidingSpot && (sim.stoneCount > 0 || sim.wrenchCount > 0)) {
           const useKind: ThrowableKind = sim.wrenchCount > 0 ? 'wrench' : 'stone';
+          const maxRange = useKind === 'wrench' ? 18.0 : 22.0;
           const weaponName = useKind === 'wrench' ? '修车合金扳手' : '街角鹅卵石';
-          if (useKind === 'wrench') {
-            sim.wrenchCount -= 1;
+
+          const targetInfo = aiSystem.findBestThrowTarget(sim.playerPos, sim.playerYaw, maxRange);
+
+          if (!targetInfo.inRange) {
+            // Target is beyond effective throwing range! Do NOT consume the item!
+            sim.throwWarningMessage = `⚠️ 目标【${targetInfo.targetName}】超出有效射程！(最大 ${maxRange}m，当前相距 ${targetInfo.distance.toFixed(1)}m)`;
+            sim.throwWarningTimer = 2.4;
+            soundFX.playSnackEat();
           } else {
-            sim.stoneCount -= 1;
+            sim.throwWarningMessage = null;
+            sim.throwWarningTimer = 0;
+            if (useKind === 'wrench') {
+              sim.wrenchCount -= 1;
+            } else {
+              sim.stoneCount -= 1;
+            }
+
+            soundFX.playThrowWhoosh();
+
+            // Rotate player toward target and swing right arm
+            _toTarget.subVectors(targetInfo.targetPos, sim.playerPos);
+            if (_toTarget.lengthSq() > 0.01) {
+              sim.playerYaw = Math.atan2(_toTarget.x, _toTarget.z);
+            }
+            playerRig.rightArm.rotation.x = -1.6;
+
+            const projMesh = createStreetThrowableMesh(mats, useKind, false);
+            const startPos = sim.playerPos.clone();
+            startPos.y += 1.35;
+            projMesh.position.copy(startPos);
+            scene.add(projMesh);
+
+            const dist = startPos.distanceTo(targetInfo.targetPos);
+            const flightDuration = THREE.MathUtils.clamp(dist / 28.0, 0.28, 0.65);
+
+            activeProjectiles.push({
+              mesh: projMesh,
+              kind: useKind,
+              weaponName,
+              startPos,
+              endPos: targetInfo.targetPos.clone(),
+              targetType: targetInfo.targetType,
+              officerId: targetInfo.officerId,
+              targetName: targetInfo.targetName,
+              elapsed: 0,
+              duration: flightDuration,
+            });
           }
-
-          soundFX.playThrowWhoosh();
-          const targetInfo = aiSystem.findBestThrowTarget(sim.playerPos, sim.playerYaw);
-
-          // Rotate player toward target and swing right arm
-          const toTarget = new THREE.Vector3().subVectors(targetInfo.targetPos, sim.playerPos);
-          if (toTarget.lengthSq() > 0.01) {
-            sim.playerYaw = Math.atan2(toTarget.x, toTarget.z);
-          }
-          playerRig.rightArm.rotation.x = -1.6;
-
-          const projMesh = createStreetThrowableMesh(mats, useKind, false);
-          const startPos = sim.playerPos.clone().add(new THREE.Vector3(0, 1.35, 0));
-          projMesh.position.copy(startPos);
-          scene.add(projMesh);
-
-          const dist = startPos.distanceTo(targetInfo.targetPos);
-          const flightDuration = THREE.MathUtils.clamp(dist / 28.0, 0.28, 0.65);
-
-          activeProjectiles.push({
-            mesh: projMesh,
-            kind: useKind,
-            weaponName,
-            startPos,
-            endPos: targetInfo.targetPos.clone(),
-            targetType: targetInfo.targetType,
-            officerId: targetInfo.officerId,
-            targetName: targetInfo.targetName,
-            elapsed: 0,
-            duration: flightDuration,
-          });
         }
       }
 
@@ -1034,10 +1157,12 @@ export default function App() {
         if (p.targetType === 'officer' && p.officerId) {
           const off = aiSystem.officers.find((o) => o.id === p.officerId);
           if (off && !off.inVehicle) {
-            p.endPos.copy(off.position).add(new THREE.Vector3(0, 1.35, 0));
+            p.endPos.copy(off.position);
+            p.endPos.y += 1.35;
           }
         } else if (p.targetType === 'car') {
-          p.endPos.copy(aiSystem.carPosition).add(new THREE.Vector3(0, 1.3, 0));
+          p.endPos.copy(aiSystem.carPosition);
+          p.endPos.y += 1.3;
         }
 
         p.mesh.position.lerpVectors(p.startPos, p.endPos, t);
@@ -1047,6 +1172,7 @@ export default function App() {
         p.mesh.rotation.y += dt * 12;
 
         if (t >= 1) {
+          disposeHierarchy(p.mesh);
           scene.remove(p.mesh);
           activeProjectiles.splice(i, 1);
 
@@ -1201,6 +1327,18 @@ export default function App() {
         playerRig.rightArm.rotation.x = THREE.MathUtils.damp(playerRig.rightArm.rotation.x, 0, 10, dt);
       }
 
+      if (playerRig.scarfTailGroup) {
+        const scarfWave = isMoving
+          ? 0.28 + Math.sin(sim.animCycle * 1.4) * (isSprinting ? 0.22 : 0.12)
+          : 0.08 + Math.sin(performance.now() * 0.003) * 0.04;
+        playerRig.scarfTailGroup.rotation.x = THREE.MathUtils.damp(
+          playerRig.scarfTailGroup.rotation.x,
+          scarfWave,
+          10,
+          dt
+        );
+      }
+
       const targetScaleY = sim.isCrouching ? 0.66 : 1.0;
       playerRig.bodyGroup.scale.y = THREE.MathUtils.damp(
         playerRig.bodyGroup.scale.y,
@@ -1279,6 +1417,7 @@ export default function App() {
       if (sim.characterSwapRequested) {
         sim.characterSwapRequested = false;
         const wasVisible = playerRig.group.visible;
+        disposeHierarchy(playerRig.group);
         scene.remove(playerRig.group);
         playerRig = glbAssetRegistry.instantiatePlayerRigFromGLB(
           mats,
@@ -1409,6 +1548,8 @@ export default function App() {
         }
 
         if (cutState.finished) {
+          aiSystem.completeArrivalDeployment();
+          sim.phaseBeforePause = 'playing';
           sim.phase = 'playing';
           setPhase('playing');
         }
@@ -1466,10 +1607,21 @@ export default function App() {
       if (sim.interactJustPressed) {
         sim.interactJustPressed = false;
         if (sim.activeHidingSpot) {
-          sim.playerPos.copy(sim.activeHidingSpot.exitPosition);
+          // 主动离开电话亭：消耗该电话亭（每个电话亭限躲一次）
+          const spot = sim.activeHidingSpot;
+          spot.used = true;
+          spot.mesh.traverse((child) => {
+            if (child instanceof THREE.Mesh && child.geometry instanceof THREE.RingGeometry) {
+              child.visible = false;
+            }
+          });
+          sim.playerPos.copy(spot.exitPosition);
           sim.activeHidingSpot = null;
+          sim.boothHidingTimer = 0;
           playerRig.group.visible = true;
           soundFX.playHideToggle(false);
+          sim.throwWarningMessage = '🚪 已主动钻出电话亭，该电话亭已使用完毕（限躲一次）！';
+          sim.throwWarningTimer = 2.5;
         } else if (nearestMission) {
           nearestMission.collected = true;
           nearestMission.mesh.visible = false;
@@ -1477,11 +1629,40 @@ export default function App() {
           soundFX.playPickup();
           aiSystem.onMissionTaskCompleted(sim.collectedCount, nearestMission.spec.name);
         } else if (nearestSpot) {
-          sim.activeHidingSpot = nearestSpot;
-          sim.playerPos.copy(nearestSpot.hidePosition);
-          sim.isCrouching = false;
-          playerRig.group.visible = false;
-          soundFX.playHideToggle(true);
+          if (nearestSpot.used) {
+            sim.throwWarningMessage = '🚫 该电话亭已使用过（每个电话亭限躲一次）！请寻找其他掩体！';
+            sim.throwWarningTimer = 2.5;
+            soundFX.playAlertPing('suspicious');
+          } else {
+            sim.activeHidingSpot = nearestSpot;
+            sim.boothHidingTimer = 0;
+            sim.playerPos.copy(nearestSpot.hidePosition);
+            sim.isCrouching = false;
+            playerRig.group.visible = false;
+            soundFX.playHideToggle(true);
+          }
+        }
+      }
+
+      // 核心策划机制：电话亭最多能隐藏 10 秒，一个电话亭只能躲一次！
+      if (sim.activeHidingSpot) {
+        sim.boothHidingTimer += dt;
+        if (sim.boothHidingTimer >= 10.0) {
+          const expiredSpot = sim.activeHidingSpot;
+          expiredSpot.used = true;
+          expiredSpot.mesh.traverse((child) => {
+            if (child instanceof THREE.Mesh && child.geometry instanceof THREE.RingGeometry) {
+              child.visible = false;
+            }
+          });
+          sim.playerPos.copy(expiredSpot.exitPosition);
+          sim.activeHidingSpot = null;
+          sim.boothHidingTimer = 0;
+          playerRig.group.visible = true;
+          soundFX.playHideToggle(false);
+          soundFX.playAlertPing('suspicious');
+          sim.throwWarningMessage = '⚠️ 电话亭隐蔽达到 10 秒上限！已被强制现身，该电话亭无法再次使用！';
+          sim.throwWarningTimer = 3.5;
         }
       }
 
@@ -1621,19 +1802,33 @@ export default function App() {
       minimapSnapRef.current.globalAlert = aiSystem.globalAlert;
       minimapSnapRef.current.heartbeatIntensity = heartbeatState.intensity;
       minimapSnapRef.current.heartbeatBpm = heartbeatState.bpm;
-      minimapSnapRef.current.officers = aiSystem.officers.map((o) => ({
-        id: o.id,
-        x: o.position.x,
-        z: o.position.z,
-        yaw: o.rotationY,
-        inVehicle: o.inVehicle,
-        state: o.state,
-      }));
 
-      // Sync HUD at ~14Hz
+      // Sync HUD at ~14Hz (Greatly reduces virtual DOM diffing & CPU load!)
       hudSyncTimer += dt;
       if (hudSyncTimer >= 0.07) {
         hudSyncTimer = 0;
+
+        minimapSnapRef.current.officers = aiSystem.officers.map((o) => ({
+          id: o.id,
+          x: o.position.x,
+          z: o.position.z,
+          yaw: o.rotationY,
+          inVehicle: o.inVehicle,
+          state: o.state,
+        }));
+
+        minimapSnapRef.current.monitors = aiSystem.monitors.map((m) => ({
+          x: m.position.x,
+          z: m.position.z,
+        }));
+
+        const currentUseKind: ThrowableKind = sim.wrenchCount > 0 ? 'wrench' : 'stone';
+        const currentMaxThrowRange = currentUseKind === 'wrench' ? 18.0 : 22.0;
+        const currentTargetStatus = aiSystem.findBestThrowTarget(
+          sim.playerPos,
+          sim.playerYaw,
+          currentMaxThrowRange
+        );
 
         let activeZoneName = '中央商业街道';
         for (const z of MAP_ZONES) {
@@ -1650,11 +1845,16 @@ export default function App() {
 
         let prompt: string | null = null;
         if (sim.activeHidingSpot) {
-          prompt = `正在【${sim.activeHidingSpot.label}】内躲藏 (参保金额增速 +¥${currentContributionRate}/秒) · 按 [E] 钻出`;
+          const remSec = Math.max(0, 10.0 - sim.boothHidingTimer);
+          prompt = `📞 正在【${sim.activeHidingSpot.label}】内隐蔽 · 倒计时 ${remSec.toFixed(1)}s (上限10s·限躲1次) · 按 [E] 钻出`;
         } else if (nearestMission) {
           prompt = `按 [E] 拾取：【${nearestMission.spec.name}】`;
         } else if (nearestSpot) {
-          prompt = `按 [E] 钻进【${nearestSpot.label}】躲避保安`;
+          if (nearestSpot.used) {
+            prompt = `🚫【${nearestSpot.label}】已使用过（每个电话亭限躲一次，请寻找其他掩体）`;
+          } else {
+            prompt = `按 [E] 钻进【${nearestSpot.label}】隐蔽 (最多10秒·限躲1次)`;
+          }
         } else if (distToExtraction <= EXTRACTION_POINT.radius) {
           if (sim.collectedCount < MISSION_ITEMS.length) {
             prompt = `地铁闸机未开启：需先收集 3 份材料 (${sim.collectedCount}/3)`;
@@ -1675,19 +1875,52 @@ export default function App() {
           Resume: '恢复街道巡航',
         };
 
-        const maxDet = Math.max(
-          ...aiSystem.officers.map((o) => o.detectionProgress),
-          aiSystem.carDetectionProgress
-        );
+        let maxDet = aiSystem.carDetectionProgress;
+        for (let i = 0; i < aiSystem.officers.length; i++) {
+          if (aiSystem.officers[i].detectionProgress > maxDet) {
+            maxDet = aiSystem.officers[i].detectionProgress;
+          }
+        }
+
+        // Compute Patrol Car Direction Detector metrics (distance, camera-relative compass angle, and street heading)
+        const dxCar = aiSystem.carPosition.x - sim.playerPos.x;
+        const dzCar = aiSystem.carPosition.z - sim.playerPos.z;
+        const carDist = Math.round(Math.hypot(dxCar, dzCar));
+        // Camera forward look vector is (-sin(cameraYaw), -cos(cameraYaw))
+        const camForwardYaw = sim.cameraYaw + Math.PI;
+        const worldAngleToCar = Math.atan2(dxCar, dzCar);
+        const relBearingRad = camForwardYaw - worldAngleToCar;
+        const carBearingDeg = Math.round((relBearingRad * 180) / Math.PI);
+
+        // Determine Patrol Car's driving direction label from carRotationY
+        const carFwdX = Math.sin(aiSystem.carRotationY);
+        const carFwdZ = Math.cos(aiSystem.carRotationY);
+        let carHeadingLabel = '向东巡航';
+        if (Math.abs(carFwdX) >= Math.abs(carFwdZ)) {
+          carHeadingLabel = carFwdX >= 0 ? '车头朝东 →' : '← 车头朝西';
+        } else {
+          carHeadingLabel = carFwdZ >= 0 ? '车头朝南 ↓' : '↑ 车头朝北';
+        }
+
+        let visionBoostCnt = 0;
+        for (let i = 0; i < aiSystem.officers.length; i++) {
+          if (aiSystem.officers[i].visionBoostActive) visionBoostCnt++;
+        }
+
+        const collectedIdsList: string[] = [];
+        const missionZoneList: string[] = [];
+        for (let i = 0; i < worldData.missionObjects.length; i++) {
+          const mObj = worldData.missionObjects[i];
+          if (mObj.collected) collectedIdsList.push(mObj.spec.id);
+          missionZoneList.push(mObj.spec.zoneName);
+        }
 
         setHud((prev) => ({
           ...prev,
           stamina: Math.round(sim.stamina),
           globalAlert: Math.round(aiSystem.globalAlert),
           maxOfficerDetection: Math.round(maxDet),
-          collectedIds: worldData.missionObjects
-            .filter((m) => m.collected)
-            .map((m) => m.spec.id),
+          collectedIds: collectedIdsList,
           timeRemaining: Math.ceil(sim.timeRemaining),
           extractionProgress: Math.min(
             100,
@@ -1725,8 +1958,25 @@ export default function App() {
           heartbeatBpm: heartbeatState.bpm,
           officerSpeedBonusPct: Math.round((aiSystem.taskSpeedMultiplier - 1) * 100),
           campExposurePct: Math.round(aiSystem.campExposureRatio * 100),
-          missionZones: worldData.missionObjects.map((m) => m.spec.zoneName),
-          visionBoostCount: aiSystem.officers.filter((o) => o.visionBoostActive).length,
+          missionZones: missionZoneList,
+          visionBoostCount: visionBoostCnt,
+          throwWarningMessage: sim.throwWarningMessage,
+          targetInRange: currentTargetStatus.inRange,
+          targetDistance: Number(currentTargetStatus.distance.toFixed(1)),
+          targetMaxRange: currentMaxThrowRange,
+          nearestTargetName: currentTargetStatus.targetName,
+          deployedOfficerRemainingSec: Number(
+            aiSystem.deployedOfficerRemainingSec.toFixed(1)
+          ),
+          isOfficerDeployedFromCar: aiSystem.isOfficerDeployedFromCar,
+          isHidingInBooth: sim.activeHidingSpot !== null,
+          boothHidingRemainingSec: sim.activeHidingSpot
+            ? Math.max(0, 10.0 - sim.boothHidingTimer)
+            : 0,
+          carBearingDeg,
+          carDistance: carDist,
+          carHeadingLabel,
+          carSeesPlayer: aiSystem.carCanSeePlayer,
         }));
       }
 
@@ -1747,6 +1997,13 @@ export default function App() {
       window.removeEventListener('contextmenu', handleContextMenu);
       document.removeEventListener('pointerlockchange', handlePointerLockChange);
       window.removeEventListener('resize', handleResize);
+      activeProjectiles.forEach((p) => {
+        disposeHierarchy(p.mesh);
+        scene.remove(p.mesh);
+      });
+      disposeHierarchy(playerRig.group);
+      disposeHierarchy(worldData.worldRootGroup);
+      aiSystem.dispose();
       mats.dispose();
       renderer.dispose();
     };
@@ -2214,6 +2471,48 @@ export default function App() {
                 </div>
               </div>
 
+              {/* Row 2.5: Patrol Car 360° Direction Detector & Heading Radar */}
+              <div
+                className={`px-2.5 py-1.5 rounded-lg border flex items-center justify-between gap-2 ${
+                  hud.carSeesPlayer
+                    ? 'bg-red-950/90 border-red-500 text-red-200 animate-pulse'
+                    : 'bg-slate-900/90 border-sky-500/45 text-sky-200'
+                }`}
+              >
+                <div className="flex items-center gap-2 min-w-0">
+                  <div
+                    className={`w-6 h-6 rounded-full flex items-center justify-center border shrink-0 ${
+                      hud.carSeesPlayer
+                        ? 'bg-red-500/30 border-red-400 text-red-200'
+                        : 'bg-sky-500/20 border-sky-400 text-amber-300'
+                    }`}
+                    title="参保车相对您当前镜头视角的方位指针"
+                  >
+                    <svg
+                      viewBox="0 0 24 24"
+                      className="w-4 h-4 transition-transform duration-75"
+                      style={{ transform: `rotate(${hud.carBearingDeg}deg)` }}
+                    >
+                      <path
+                        d="M12 2L19 19L12 15L5 19L12 2Z"
+                        fill="currentColor"
+                      />
+                    </svg>
+                  </div>
+                  <div className="min-w-0">
+                    <div className="text-[9px] text-slate-300 flex items-center gap-1">
+                      <span className="font-bold text-amber-300">🚐 参保车方向检测器</span>
+                      <span className="font-mono-tabular text-sky-300">({hud.carDistance}m)</span>
+                    </div>
+                    <div className="text-[10px] font-bold truncate">
+                      {hud.carSeesPlayer
+                        ? '🚨 已被参保车前向雷达锁定！'
+                        : `${hud.carHeadingLabel} · ${hud.carStatusText}`}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
               {/* Row 3: Compact Randomized Mission Progress + Permanent Officer Speed Bonus */}
               <div className="px-2 py-1.5 rounded-lg bg-slate-900/85 border border-slate-800 space-y-1">
                 <div className="flex items-center justify-between text-[10px]">
@@ -2310,6 +2609,33 @@ export default function App() {
               {hud.escapeBannerMessage && (
                 <div className="px-3 py-1.5 rounded-lg bg-emerald-950/90 backdrop-blur-md border border-emerald-400 text-emerald-200 text-[11px] font-bold shadow-md text-center">
                   {hud.escapeBannerMessage}
+                </div>
+              )}
+              {hud.throwWarningMessage && (
+                <div className="px-3.5 py-1.5 rounded-xl bg-rose-950/95 backdrop-blur-md border border-rose-500 text-rose-200 text-[11px] font-bold shadow-xl text-center animate-pulse">
+                  {hud.throwWarningMessage}
+                </div>
+              )}
+              {hud.isHidingInBooth && (
+                <div className="px-3.5 py-1.5 rounded-xl bg-cyan-950/95 backdrop-blur-md border-2 border-cyan-400 text-cyan-200 text-[11px] font-bold shadow-xl flex items-center justify-center gap-2 animate-pulse">
+                  <span>📞 电话亭隐蔽中</span>
+                  <span className="font-mono-tabular bg-cyan-500/40 px-2 py-0.5 rounded text-white font-extrabold text-xs">
+                    {hud.boothHidingRemainingSec.toFixed(1)}s
+                  </span>
+                  <span className="text-[10px] text-cyan-300 font-normal">
+                    (上限10秒 · 仅限躲一次 · 保安已向四周散开)
+                  </span>
+                </div>
+              )}
+              {hud.isOfficerDeployedFromCar && hud.deployedOfficerRemainingSec > 0 && (
+                <div className="px-3.5 py-1.5 rounded-xl bg-orange-950/95 backdrop-blur-md border-2 border-orange-400 text-orange-200 text-[11px] font-bold shadow-xl flex items-center justify-center gap-2 animate-pulse">
+                  <span>🚨 参保车下放机动保安搜查中</span>
+                  <span className="font-mono-tabular bg-orange-500/40 px-2 py-0.5 rounded text-white font-extrabold text-xs">
+                    {hud.deployedOfficerRemainingSec.toFixed(1)}s
+                  </span>
+                  <span className="text-[10px] text-orange-300 font-normal">
+                    (若发现玩家则延长存活时间，否则归队上车)
+                  </span>
                 </div>
               )}
               {hud.carRadioMessage && (
@@ -2466,7 +2792,7 @@ export default function App() {
 
               <div className="h-4 w-px bg-slate-700/80" />
 
-              {/* Throwable Action Pill */}
+              {/* Throwable Action Pill with Distance & Range Check */}
               <div className="flex items-center gap-1.5">
                 <span className="text-[11px] font-mono-tabular text-slate-200">
                   🪨{hud.stoneCount} 🔧{hud.wrenchCount}
@@ -2474,13 +2800,24 @@ export default function App() {
                 <button
                   onClick={triggerThrowNow}
                   disabled={hud.stoneCount + hud.wrenchCount <= 0}
-                  className={`px-2.5 py-1 rounded-md text-[11px] font-bold transition-all cursor-pointer whitespace-nowrap ${
-                    hud.stoneCount + hud.wrenchCount > 0
-                      ? 'bg-sky-400 hover:bg-sky-300 text-slate-950 shadow-sm active:scale-95'
-                      : 'bg-slate-800 text-slate-500 cursor-not-allowed'
+                  className={`px-2.5 py-1 rounded-md text-[11px] font-bold transition-all cursor-pointer whitespace-nowrap flex items-center gap-1 ${
+                    hud.stoneCount + hud.wrenchCount <= 0
+                      ? 'bg-slate-800 text-slate-500 cursor-not-allowed'
+                      : hud.targetInRange
+                      ? 'bg-emerald-400 hover:bg-emerald-300 text-slate-950 shadow-md font-extrabold active:scale-95'
+                      : 'bg-amber-500/85 hover:bg-amber-400 text-slate-950 shadow-sm active:scale-95'
                   }`}
+                  title={
+                    hud.targetInRange
+                      ? `锁定【${hud.nearestTargetName}】相距 ${hud.targetDistance}m (射程内，按 G / 左键 投掷)`
+                      : `距离【${hud.nearestTargetName || '目标'}】${hud.targetDistance}m (超出有效射程 ${hud.targetMaxRange}m)`
+                  }
                 >
-                  🎯 投掷 [G / 左键]
+                  {hud.stoneCount + hud.wrenchCount <= 0
+                    ? '🎯 无投掷物'
+                    : hud.targetInRange
+                    ? `🎯 锁定: ${hud.nearestTargetName} (${hud.targetDistance}m) [G]`
+                    : `⚠️ 超距 (${hud.targetDistance}m > ${hud.targetMaxRange}m) [G]`}
                 </button>
               </div>
 
@@ -2488,22 +2825,6 @@ export default function App() {
 
               {/* Quick Utility Buttons */}
               <div className="flex items-center gap-1.5">
-                <button
-                  onClick={() =>
-                    setCharacterId((prev) =>
-                      prev === 'luna_cyber'
-                        ? 'street_kid'
-                        : prev === 'street_kid'
-                        ? 'flash_rider'
-                        : prev === 'flash_rider'
-                        ? 'suited_worker'
-                        : 'luna_cyber'
-                    )
-                  }
-                  className="px-2 py-1 text-[11px] font-medium text-amber-300 bg-slate-800/90 hover:bg-slate-700 rounded-md cursor-pointer whitespace-nowrap"
-                >
-                  换角: {activeCharSpec.name.split(' · ')[1]}
-                </button>
                 <button
                   onClick={() =>
                     setCameraDistancePreset((prev) =>
@@ -2536,20 +2857,23 @@ export default function App() {
         </div>
       )}
 
-      {/* 4. COMPLETE PAUSE MENU OVERLAY (Esc Pause / Resume / Restart / Stage Select / Main Menu) */}
+      {/* 4. COMPLETE PAUSE MENU OVERLAY (Esc Pause / Resume / Restart / Stage Select / Character Select / Main Menu) */}
       {phase === 'paused' && (
-        <div className="fixed inset-0 z-30 flex items-center justify-center bg-[#0b0f19]/88 backdrop-blur-md p-4">
-          <div className="bg-[#111827] border border-slate-700 rounded-2xl max-w-xl w-full p-6 shadow-2xl space-y-4 max-h-[92vh] overflow-y-auto">
+        <div className="fixed inset-0 z-30 flex items-center justify-center bg-[#0b0f19]/88 backdrop-blur-md p-3 sm:p-4">
+          <div className="bg-[#111827] border border-slate-700 rounded-2xl max-w-2xl w-full p-5 sm:p-6 shadow-2xl space-y-4 max-h-[94vh] overflow-y-auto">
             <div className="flex items-center justify-between border-b border-slate-800 pb-3">
               <div>
                 <div className="text-[11px] font-mono-tabular uppercase tracking-widest text-amber-400">
                   GAME PAUSED · 游戏已暂停
                 </div>
-                <h2 className="text-xl font-extrabold text-white mt-0.5">
-                  {activeStageSpec.name} · 暂停控制中心
+                <h2 className="text-xl font-extrabold text-white mt-0.5 flex items-center gap-2">
+                  <span>{activeStageSpec.name}</span>
+                  <span className="text-xs px-2 py-0.5 rounded bg-slate-800 border border-slate-700 text-sky-300 font-normal">
+                    当前角色: {activeCharSpec.name}
+                  </span>
                 </h2>
               </div>
-              <span className="px-2.5 py-1 text-xs font-mono-tabular rounded-md bg-slate-800 text-slate-300 border border-slate-700">
+              <span className="px-2.5 py-1 text-xs font-mono-tabular rounded-md bg-slate-800 text-slate-300 border border-slate-700 hidden sm:inline-block">
                 快捷键: Esc 继续 / R 重开
               </span>
             </div>
@@ -2563,10 +2887,10 @@ export default function App() {
                 <span>▶️ 继续游戏 (Esc)</span>
               </button>
               <button
-                onClick={() => startStreetStroll()}
+                onClick={() => startStreetStroll(undefined, stageId, characterId)}
                 className="py-3 px-4 rounded-xl text-sm font-bold text-white bg-sky-600 hover:bg-sky-500 shadow-md transition-transform active:scale-98 cursor-pointer flex items-center justify-center gap-1.5"
               >
-                <span>🔄 重开本关 (R)</span>
+                <span>🔄 重新开始本关 (R)</span>
               </button>
               <button
                 onClick={returnToTitleScreen}
@@ -2598,35 +2922,59 @@ export default function App() {
               </div>
             </div>
 
-            {/* Switch Stage in Pause Menu (Rebuilds Distinct 3D Architectural Scene!) */}
-            <div className="space-y-2">
-              <div className="text-xs font-semibold text-sky-300">
-                🗺️ 切换 3D 场景关卡（直接更换欧式商业街 / 海边灯塔小镇 / 乡村风车街道建筑场景）：
+            {/* Operation Controls Guide & Pause Help */}
+            <div className="p-4 rounded-xl bg-[#0b0f19]/90 border border-slate-800 space-y-2.5">
+              <div className="flex items-center justify-between text-xs">
+                <span className="font-bold text-amber-300">
+                  🎮 操作按键速查指南
+                </span>
+                <span className="text-[11px] text-slate-400">
+                  当前出战: <strong className="text-white">{activeCharSpec.name}</strong> · 当前场景: <strong className="text-sky-300">{activeStageSpec.name}</strong>
+                </span>
               </div>
-              <div className="grid grid-cols-1 gap-2">
-                {(Object.keys(STAGE_CONFIGS) as StageId[]).map((sKey) => {
-                  const st = STAGE_CONFIGS[sKey];
-                  const active = stageId === sKey;
-                  return (
-                    <button
-                      key={st.id}
-                      onClick={() => startStreetStroll(undefined, st.id)}
-                      className={`p-2.5 rounded-lg border text-left transition-colors cursor-pointer ${
-                        active
-                          ? 'bg-slate-800 border-sky-400 text-white'
-                          : 'bg-[#0b0f19] border-slate-800 text-slate-400 hover:border-slate-700'
-                      }`}
-                    >
-                      <div className="flex items-center justify-between text-xs font-bold">
-                        <span>{st.name}</span>
-                        <span className="text-sky-300 font-mono-tabular">
-                          {st.themeBadge} · 车视野 {st.carVisionRange}m
-                        </span>
-                      </div>
-                      <div className="text-[11px] text-slate-400 mt-0.5">{st.subtitle}</div>
-                    </button>
-                  );
-                })}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[11px]">
+                <div className="p-2 rounded-lg bg-slate-900/80 border border-slate-800 flex items-center gap-2">
+                  <span className="px-1.5 py-0.5 rounded bg-slate-800 text-amber-300 font-mono-tabular font-bold text-[10px]">
+                    W / A / S / D
+                  </span>
+                  <span className="text-slate-300">街区前后左右行走与移动</span>
+                </div>
+                <div className="p-2 rounded-lg bg-slate-900/80 border border-slate-800 flex items-center gap-2">
+                  <span className="px-1.5 py-0.5 rounded bg-slate-800 text-amber-300 font-mono-tabular font-bold text-[10px]">
+                    Shift
+                  </span>
+                  <span className="text-slate-300">疾跑冲刺（消耗体力槽）</span>
+                </div>
+                <div className="p-2 rounded-lg bg-slate-900/80 border border-slate-800 flex items-center gap-2">
+                  <span className="px-1.5 py-0.5 rounded bg-slate-800 text-amber-300 font-mono-tabular font-bold text-[10px]">
+                    C
+                  </span>
+                  <span className="text-slate-300">蹲伏隐蔽（在矮墙/灌木中有效）</span>
+                </div>
+                <div className="p-2 rounded-lg bg-slate-900/80 border border-slate-800 flex items-center gap-2">
+                  <span className="px-1.5 py-0.5 rounded bg-slate-800 text-amber-300 font-mono-tabular font-bold text-[10px]">
+                    E
+                  </span>
+                  <span className="text-slate-300">拾取材料 / 钻进电话亭（限躲1次且最多10s）</span>
+                </div>
+                <div className="p-2 rounded-lg bg-slate-900/80 border border-slate-800 flex items-center gap-2">
+                  <span className="px-1.5 py-0.5 rounded bg-slate-800 text-amber-300 font-mono-tabular font-bold text-[10px]">
+                    G / 左键
+                  </span>
+                  <span className="text-slate-300">投掷石头/扳手锁定保安或参保车</span>
+                </div>
+                <div className="p-2 rounded-lg bg-slate-900/80 border border-slate-800 flex items-center gap-2">
+                  <span className="px-1.5 py-0.5 rounded bg-slate-800 text-amber-300 font-mono-tabular font-bold text-[10px]">
+                    鼠标移动 / 拖拽
+                  </span>
+                  <span className="text-slate-300">360° 全景观察街道与敌情</span>
+                </div>
+              </div>
+              <div className="p-2.5 rounded-lg bg-slate-900/60 border border-slate-800/80 text-[11px] text-slate-400 flex items-center gap-2">
+                <span>💡</span>
+                <span>
+                  提示：如需自由切换关卡与出战角色，请点击上方<strong>「🏠 返回主菜单」</strong>进行自由选择配置。
+                </span>
               </div>
             </div>
 
@@ -2654,57 +3002,26 @@ export default function App() {
                 <div className="flex items-center gap-2">
                   <button
                     onClick={() =>
-                      setCameraDistancePreset((prev) =>
-                        prev === 'near' ? 'standard' : prev === 'standard' ? 'tactical' : 'near'
-                      )
-                    }
-                    className="flex-1 py-1.5 px-2.5 text-xs font-semibold rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 cursor-pointer"
-                  >
-                    镜头: {cameraDistancePreset === 'near' ? '近距' : cameraDistancePreset === 'tactical' ? '高空' : '标准'}
-                  </button>
-                  <button
-                    onClick={toggleMute}
-                    className="py-1.5 px-3 text-xs font-semibold rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 cursor-pointer"
-                  >
-                    {isMuted ? '🔇 静音' : '🔊 音效'}
-                  </button>
-                </div>
-              </div>
-            </div>
-
-            {/* Switch Player Character in Pause Menu */}
-            <div className="space-y-2">
-              <div className="text-xs font-medium text-amber-300">实时切换玩家角色：</div>
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                {(Object.keys(PLAYER_CHARACTERS) as PlayerCharacterId[]).map((cKey) => {
-                  const ch = PLAYER_CHARACTERS[cKey];
-                  const active = characterId === cKey;
-                  return (
-                    <button
-                      key={ch.id}
-                      onClick={() => setCharacterId(ch.id)}
-                      className={`p-2 rounded-lg border text-left transition-colors flex flex-col items-center text-center cursor-pointer ${
-                        active
-                          ? 'bg-slate-800 border-amber-400 text-white'
-                          : 'bg-[#0b0f19] border-slate-800 text-slate-400 hover:border-slate-700'
-                      }`}
-                    >
-                      {characterPortraits[cKey] && (
-                        <img
-                          src={characterPortraits[cKey]}
-                          alt={ch.name}
-                          className="w-10 h-10 rounded-md object-cover border border-slate-600 mb-1"
-                        />
-                      )}
-                      <div className="text-xs font-semibold truncate w-full">{ch.name}</div>
-                    </button>
-                  );
-                })}
+                    setCameraDistancePreset((prev) =>
+                      prev === 'near' ? 'standard' : prev === 'standard' ? 'tactical' : 'near'
+                    )
+                  }
+                  className="flex-1 py-1.5 px-2.5 text-xs font-semibold rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 cursor-pointer"
+                >
+                  镜头: {cameraDistancePreset === 'near' ? '近距' : cameraDistancePreset === 'tactical' ? '高空' : '标准'}
+                </button>
+                <button
+                  onClick={toggleMute}
+                  className="py-1.5 px-3 text-xs font-semibold rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 cursor-pointer"
+                >
+                  {isMuted ? '🔇 静音' : '🔊 音效'}
+                </button>
               </div>
             </div>
           </div>
         </div>
-      )}
+      </div>
+    )}
 
       {/* 5. VICTORY OVERLAY (With Next Stage Progression!) */}
       {phase === 'victory' && (

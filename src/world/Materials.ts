@@ -197,12 +197,20 @@ export function createMaterialLibrary(renderer?: THREE.WebGLRenderer): MaterialL
   ];
   const dynamicMaterials: THREE.Material[] = [];
 
+  const signMaterialCache = new Map<string, THREE.MeshStandardMaterial>();
+
   const createSignMaterial = (
     title: string,
     subtitle: string,
     bgHex: string,
     accentHex: string
   ): THREE.MeshStandardMaterial => {
+    const cacheKey = `${title}|${subtitle}|${bgHex}|${accentHex}`;
+    const cached = signMaterialCache.get(cacheKey);
+    if (cached) {
+      return cached;
+    }
+
     const canvas = document.createElement('canvas');
     canvas.width = 512;
     canvas.height = 160;
@@ -235,7 +243,9 @@ export function createMaterialLibrary(renderer?: THREE.WebGLRenderer): MaterialL
       roughness: 0.45,
       metalness: 0.08,
     });
+    mat.userData = { ...mat.userData, isSharedMat: true };
     dynamicMaterials.push(mat);
+    signMaterialCache.set(cacheKey, mat);
     return mat;
   };
 
@@ -618,6 +628,12 @@ export function createMaterialLibrary(renderer?: THREE.WebGLRenderer): MaterialL
       opacity: 0.65,
     }),
   };
+
+  Object.values(materials).forEach((m) => {
+    if (m instanceof THREE.Material) {
+      m.userData = { ...m.userData, isSharedMat: true };
+    }
+  });
 
   return {
     ...materials,

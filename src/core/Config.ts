@@ -34,6 +34,7 @@ export interface StageConfig {
   carSpeedMultiplier: number;
   loseSightThresholdSec: number; // 离开保安视野后仍继续追逐的阈值时间（超过此阈值才放弃追捕）
   allThreeOfficersOnFoot: boolean;
+  maxOnFootOfficers: number; // 场上允许同时活动的最大保安总人数上限（杜绝保安不限数人海问题）
 }
 
 export const STAGE_CONFIGS: Record<StageId, StageConfig> = {
@@ -62,6 +63,7 @@ export const STAGE_CONFIGS: Record<StageId, StageConfig> = {
     carSpeedMultiplier: 1.0,
     loseSightThresholdSec: 3.6,
     allThreeOfficersOnFoot: false,
+    maxOnFootOfficers: 3,
   },
   stage_2: {
     id: 'stage_2',
@@ -88,6 +90,7 @@ export const STAGE_CONFIGS: Record<StageId, StageConfig> = {
     carSpeedMultiplier: 1.14,
     loseSightThresholdSec: 4.2,
     allThreeOfficersOnFoot: false,
+    maxOnFootOfficers: 3,
   },
   stage_3: {
     id: 'stage_3',
@@ -113,7 +116,8 @@ export const STAGE_CONFIGS: Record<StageId, StageConfig> = {
     officerSpeedMultiplier: 1.14,
     carSpeedMultiplier: 1.2,
     loseSightThresholdSec: 4.8,
-    allThreeOfficersOnFoot: true,
+    allThreeOfficersOnFoot: false,
+    maxOnFootOfficers: 4,
   },
 };
 

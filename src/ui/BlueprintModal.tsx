@@ -265,6 +265,33 @@ export const BlueprintModal: React.FC<BlueprintModalProps> = ({
                   </div>
                 </div>
               </div>
+
+              {/* 核心最新策划机制：参保直通车、路面监控仪与防合体战术系统 */}
+              <div className="p-4 rounded-lg bg-[#0b0f19] border border-slate-800 space-y-2">
+                <h4 className="font-semibold text-white">
+                  新增升级：防合体战术包抄、路面监控仪与无限增援策划
+                </h4>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs text-slate-300">
+                  <div className="p-2.5 rounded bg-slate-900/60 border border-slate-800">
+                    <span className="text-amber-400 font-bold block mb-1">🛡️ 保安防合体与 360° 环形战术包抄</span>
+                    <p className="text-slate-400">
+                      无论场上同时有多少名保安，均具备实时防挤压分离动力学 (保持 &ge; 1.35m 间距)，且追捕时按在场保安数量自动计算 360° 扇形包抄角，绝不合体重叠。
+                    </p>
+                  </div>
+                  <div className="p-2.5 rounded bg-slate-900/60 border border-slate-800">
+                    <span className="text-cyan-400 font-bold block mb-1">📡 参保车红外监控仪 (路面布设)</span>
+                    <p className="text-slate-400">
+                      参保直通车平稳巡逻 (3.4m/s 巡航 / 5.2m/s 警戒)，沿途布设红外扫描监控仪。若被监控仪扫描锁定，监控仪报警后立即自毁移除，并立即从参保车下放一名新保安。
+                    </p>
+                  </div>
+                  <div className="p-2.5 rounded bg-slate-900/60 border border-slate-800 col-span-1 md:col-span-2">
+                    <span className="text-rose-400 font-bold block mb-1">🚨 保安人数不限总数 · 动态无限增援与独立搜查寿命策划</span>
+                    <p className="text-slate-400">
+                      只要被参保车视野或路面监控仪发现，参保车就会源源不断下放新的特勤保安（不限总数）！同时每位下放保安拥有独立的 22 秒地面搜查期：期间若再次看到玩家则重置延长搜捕；若玩家通过潜行躲藏 22 秒未被发现，该保安将自动返回参保车归队，兼顾刺激感与潜行博弈空间。
+                    </p>
+                  </div>
+                </div>
+              </div>
             </div>
           )}
 
