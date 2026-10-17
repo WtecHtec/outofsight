@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { OfficerId, PatrolAndAISystem } from './ai/PatrolAndAI';
-import { soundFX } from './core/AudioSystem';
+import { BGM_TRACKS, BgmTrackId, soundFX } from './core/AudioSystem';
 import {
   EXTRACTION_POINT,
   MAP_ZONES,
@@ -16,8 +16,6 @@ import {
   ThrowableKind,
   WORLD_CONFIG,
 } from './core/Config';
-import { BlueprintModal } from './ui/BlueprintModal';
-import { GLBAssetModal } from './ui/GLBAssetModal';
 import { Minimap, MinimapSnapshot } from './ui/Minimap';
 import { glbAssetRegistry } from './world/GLBAssetManager';
 import { createMaterialLibrary } from './world/Materials';
@@ -119,11 +117,12 @@ interface HudState {
   // 电话亭最多隐蔽 10 秒状态
   isHidingInBooth: boolean;
   boothHidingRemainingSec: number;
-  // 参保直通车方向检测器状态 (相对方位角、距离、行驶朝向、视野锁定)
+  // 参保直通车方向检测器状态 (相对方位角、距离、行驶朝向、视野锁定) 与路面检测器数量
   carBearingDeg: number;
   carDistance: number;
   carHeadingLabel: string;
   carSeesPlayer: boolean;
+  activeMonitorCount: number;
 }
 
 const _camDesiredPos = new THREE.Vector3();
@@ -148,10 +147,10 @@ export default function App() {
     suited_worker: '',
   });
   const [isMuted, setIsMuted] = useState<boolean>(false);
+  const [audioVolume, setAudioVolume] = useState<number>(0.65);
+  const [bgmTrack, setBgmTrack] = useState<BgmTrackId>('sneaky_pizzicato');
   const [mapExpanded, setMapExpanded] = useState<boolean>(false);
   const [dockCollapsed, setDockCollapsed] = useState<boolean>(true);
-  const [blueprintOpen, setBlueprintOpen] = useState<boolean>(false);
-  const [glbModalOpen, setGlbModalOpen] = useState<boolean>(false);
   const [cameraDistancePreset, setCameraDistancePreset] = useState<'near' | 'standard' | 'tactical'>('standard');
   const [isPointerLocked, setIsPointerLocked] = useState<boolean>(false);
   const [mouseSensitivity, setMouseSensitivity] = useState<number>(1.0);
@@ -214,6 +213,7 @@ export default function App() {
     carDistance: 32,
     carHeadingLabel: '向东巡航',
     carSeesPlayer: false,
+    activeMonitorCount: 8,
   });
 
   const simRef = useRef({
@@ -374,7 +374,8 @@ export default function App() {
       simRef.current.phase = 'strolling';
       setPhase('strolling');
       setMapExpanded(false);
-      setBlueprintOpen(false);
+      soundFX.setChaseTension(false);
+      soundFX.startBgm();
       requestGamePointerLock();
     },
     [playstyle, requestGamePointerLock]
@@ -389,6 +390,7 @@ export default function App() {
     const targetResumePhase = simRef.current.phaseBeforePause || 'playing';
     simRef.current.phase = targetResumePhase;
     setPhase(targetResumePhase);
+    soundFX.startBgm();
     requestGamePointerLock();
   }, [stageId, characterId, startStreetStroll, requestGamePointerLock]);
 
@@ -403,6 +405,7 @@ export default function App() {
 
   const returnToTitleScreen = useCallback(() => {
     exitGamePointerLock();
+    soundFX.setChaseTension(false);
     simRef.current.phase = 'title';
     setPhase('title');
     setMapExpanded(false);
@@ -426,6 +429,23 @@ export default function App() {
       soundFX.setMuted(next);
       return next;
     });
+  }, []);
+
+  const handleVolumeChange = useCallback((vol: number) => {
+    setAudioVolume(vol);
+    soundFX.setVolume(vol);
+    if (vol > 0 && isMuted) {
+      setIsMuted(false);
+      soundFX.setMuted(false);
+    }
+  }, [isMuted]);
+
+  const handleSelectBgmTrack = useCallback((trackId: BgmTrackId) => {
+    setBgmTrack(trackId);
+    soundFX.setBgmTrack(trackId);
+    if (trackId !== 'off') {
+      soundFX.startBgm();
+    }
   }, []);
 
   const activeCharSpec = PLAYER_CHARACTERS[characterId];
@@ -542,6 +562,127 @@ export default function App() {
     hud.certificateNo,
     hud.collectedIds.length,
     hud.contributionAmount,
+    hud.totalHidingSeconds,
+  ]);
+
+  // Downloads the Official Victory Honor Certificate ("免检通关荣誉证书") with the Selected Character's 3D Avatar as a PNG image
+  const downloadVictoryCertificateImage = useCallback(() => {
+    const canvas = document.createElement('canvas');
+    canvas.width = 760;
+    canvas.height = 480;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    ctx.fillStyle = '#ecfdf5';
+    ctx.fillRect(0, 0, 760, 480);
+
+    ctx.strokeStyle = '#047857';
+    ctx.lineWidth = 6;
+    ctx.strokeRect(16, 16, 728, 448);
+    ctx.strokeStyle = '#10b981';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(26, 26, 708, 428);
+
+    ctx.fillStyle = '#064e3b';
+    ctx.font = 'bold 28px "Plus Jakarta Sans", sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('视线之外 · 街区潜行免检通关荣誉证书', 380, 72);
+
+    ctx.fillStyle = '#047857';
+    ctx.font = '600 13px monospace';
+    ctx.fillText(
+      `荣誉编号：${hud.certificateNo}   |   通关街区：${activeStageSpec.name}`,
+      380,
+      100
+    );
+
+    ctx.strokeStyle = '#a7f3d0';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(48, 116);
+    ctx.lineTo(712, 116);
+    ctx.stroke();
+
+    ctx.textAlign = 'left';
+    ctx.fillStyle = '#0f172a';
+    ctx.font = 'bold 17px "Plus Jakarta Sans", sans-serif';
+    ctx.fillText(`荣誉通关者：${activeCharSpec.name}（${activeCharSpec.title}）`, 230, 158);
+
+    ctx.font = '15px "Plus Jakarta Sans", sans-serif';
+    ctx.fillStyle = '#1e293b';
+    ctx.fillText(`通关撤离方式：集齐 3/3 份免检材料 · 穿越东侧时空传送门`, 230, 194);
+    ctx.fillText(`街区周旋时长：${hud.totalHidingSeconds} 秒（剩余时间 ${formatTime(hud.timeRemaining)}）`, 230, 226);
+    ctx.fillText(`全图警报暴露：${hud.timesSpotted} 次`, 230, 258);
+
+    ctx.fillStyle = '#d1fae5';
+    ctx.fillRect(230, 278, 460, 76);
+    ctx.strokeStyle = '#059669';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(230, 278, 460, 76);
+
+    ctx.fillStyle = '#065f46';
+    ctx.font = 'bold 14px "Plus Jakarta Sans", sans-serif';
+    ctx.fillText('核定成功规避参保金额（全额免缴认证）：', 246, 304);
+
+    ctx.fillStyle = '#059669';
+    ctx.font = 'bold 30px monospace';
+    ctx.fillText(`¥ ${hud.contributionAmount.toLocaleString('zh-CN')}.00 元`, 246, 340);
+
+    ctx.fillStyle = '#475569';
+    ctx.font = '12px "Plus Jakarta Sans", sans-serif';
+    ctx.fillText(
+      '表彰词：面对参保直通车、红外检测器与保安围堵，凭高超身法全身而退，特发此证以资鼓励！',
+      54,
+      424
+    );
+
+    ctx.save();
+    ctx.translate(610, 365);
+    ctx.rotate(-0.18);
+    ctx.strokeStyle = 'rgba(5, 150, 105, 0.88)';
+    ctx.lineWidth = 3.5;
+    ctx.beginPath();
+    ctx.arc(0, 0, 52, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.font = 'bold 13px "Plus Jakarta Sans", sans-serif';
+    ctx.fillStyle = 'rgba(5, 150, 105, 0.9)';
+    ctx.textAlign = 'center';
+    ctx.fillText('街区潜行委员会', 0, -10);
+    ctx.fillText('免检通关荣誉章', 0, 10);
+    ctx.fillText('★', 0, 32);
+    ctx.restore();
+
+    const triggerDownload = () => {
+      const link = document.createElement('a');
+      link.download = `通关荣誉证书_${activeCharSpec.name}_${hud.certificateNo}.png`;
+      link.href = canvas.toDataURL('image/png');
+      link.click();
+    };
+
+    if (activePortraitUrl) {
+      const img = new Image();
+      img.onload = () => {
+        ctx.fillStyle = '#0f172a';
+        ctx.fillRect(54, 138, 148, 184);
+        ctx.drawImage(img, 54, 138, 148, 184);
+        ctx.strokeStyle = '#059669';
+        ctx.lineWidth = 3;
+        ctx.strokeRect(54, 138, 148, 184);
+        triggerDownload();
+      };
+      img.src = activePortraitUrl;
+    } else {
+      triggerDownload();
+    }
+  }, [
+    activeCharSpec.name,
+    activeCharSpec.title,
+    activePortraitUrl,
+    activeStageSpec.name,
+    hud.certificateNo,
+    hud.contributionAmount,
+    hud.timeRemaining,
+    hud.timesSpotted,
     hud.totalHidingSeconds,
   ]);
 
@@ -807,8 +948,10 @@ export default function App() {
           if (simRef.current.phase === 'title') {
             e.preventDefault();
             simRef.current.resetToStrollRequested = true;
+            simRef.current.phaseBeforePause = 'strolling';
             simRef.current.phase = 'strolling';
             setPhase('strolling');
+            soundFX.startBgm();
             lockCanvasPointer();
           } else if (simRef.current.phase === 'strolling') {
             e.preventDefault();
@@ -1103,7 +1246,7 @@ export default function App() {
             // Target is beyond effective throwing range! Do NOT consume the item!
             sim.throwWarningMessage = `⚠️ 目标【${targetInfo.targetName}】超出有效射程！(最大 ${maxRange}m，当前相距 ${targetInfo.distance.toFixed(1)}m)`;
             sim.throwWarningTimer = 2.4;
-            soundFX.playSnackEat();
+            soundFX.playOutOfRange();
           } else {
             sim.throwWarningMessage = null;
             sim.throwWarningTimer = 0;
@@ -1475,12 +1618,24 @@ export default function App() {
 
       const extOrb = worldData.extractionBeacon.getObjectByName('beaconOrb');
       if (extOrb) {
-        extOrb.rotation.y = elapsed * 2.2;
-        extOrb.position.y = 5.2 + Math.sin(elapsed * 3) * 0.15;
+        extOrb.rotation.y = elapsed * 2.4;
+        extOrb.rotation.x = elapsed * 1.3;
+        extOrb.position.y = 5.65 + Math.sin(elapsed * 3.2) * 0.16;
+      }
+      const portalInnerRing = worldData.extractionBeacon.getObjectByName('portalInnerRing');
+      if (portalInnerRing) {
+        portalInnerRing.rotation.z = -elapsed * 1.45;
+      }
+      const portalVortex = worldData.extractionBeacon.getObjectByName('portalVortex');
+      if (portalVortex) {
+        portalVortex.rotation.z = elapsed * 2.1;
+        const pulseScale = 0.96 + Math.sin(elapsed * 4.5) * 0.05;
+        portalVortex.scale.set(pulseScale, pulseScale, 1);
       }
 
       // PHASE A: TITLE SCREEN (Showcasing 3D Chibi Character + Reference Image 2 Yellow Car & Colorful Rowhouse Street!)
       if (sim.phase === 'title') {
+        aiSystem.updateMonitorsVisualRotation(dt);
         const panX = -18 + Math.sin(elapsed * 0.25) * 6;
         playerRig.group.visible = true;
         playerRig.group.position.set(panX + 2.2, 0, 5.2);
@@ -1499,6 +1654,24 @@ export default function App() {
         checkStreetPickupsAndProjectiles(dt);
         const moveInfo = updatePlayerMovement(dt, cfg.walkSpeed, true);
         updateThirdPersonCamera(dt);
+
+        // Rotate 360° detectors & check if player stepped into a detector during strolling
+        const spottedByMonitorInStroll = aiSystem.updateStreetMonitors(
+          dt,
+          sim.playerPos,
+          sim.isCrouching,
+          false,
+          false,
+          worldData.colliders
+        );
+        if (spottedByMonitorInStroll) {
+          aiSystem.completeArrivalDeployment();
+          sim.phaseBeforePause = 'playing';
+          sim.phase = 'playing';
+          setPhase('playing');
+          renderer.render(scene, camera);
+          return;
+        }
 
         sim.strollTimer += dt * (moveInfo.isMoving ? 1.0 : 0.38);
 
@@ -1527,6 +1700,7 @@ export default function App() {
 
       // PHASE C: CINEMATIC CUTSCENE
       if (sim.phase === 'cutscene') {
+        aiSystem.updateMonitorsVisualRotation(dt);
         sim.cutsceneTimer += dt;
         if (sim.skipCutsceneRequested) {
           sim.skipCutsceneRequested = false;
@@ -1777,6 +1951,15 @@ export default function App() {
         if (sim.extractionTimer >= WORLD_CONFIG.extractionHoldTime) {
           sim.phase = 'victory';
           soundFX.playVictory();
+          const passCertId = `NO.2026-PASS-${Math.floor(100000 + Math.random() * 899999)}`;
+          setHud((prev) => ({
+            ...prev,
+            certificateNo: passCertId,
+            timesSpotted: aiSystem.timesSpotted,
+            contributionAmount: Math.round(sim.contributionAmount),
+            totalHidingSeconds: Number(sim.totalHidingSeconds.toFixed(1)),
+            hitReactionPopup: null,
+          }));
           setPhase('victory');
           return;
         }
@@ -1786,7 +1969,8 @@ export default function App() {
 
       updateThirdPersonCamera(dt);
 
-      // Proximity Heartbeat Audio & Sensor (Stronger as guard/patrol car gets closer; disappears when >= 28m away!)
+      // Proximity Heartbeat Audio & Sensor + Dynamic BGM Chase Tension
+      soundFX.setChaseTension(aiSystem.activeChaserName !== null);
       const minThreatDist = aiSystem.getMinThreatDistance(sim.playerPos);
       const heartbeatState = soundFX.updateProximityHeartbeat(minThreatDist, dt);
 
@@ -1820,6 +2004,8 @@ export default function App() {
         minimapSnapRef.current.monitors = aiSystem.monitors.map((m) => ({
           x: m.position.x,
           z: m.position.z,
+          yaw: m.baseYaw + m.sweepAngle,
+          radius: m.detectionRadius,
         }));
 
         const currentUseKind: ThrowableKind = sim.wrenchCount > 0 ? 'wrench' : 'stone';
@@ -1857,9 +2043,9 @@ export default function App() {
           }
         } else if (distToExtraction <= EXTRACTION_POINT.radius) {
           if (sim.collectedCount < MISSION_ITEMS.length) {
-            prompt = `地铁闸机未开启：需先收集 3 份材料 (${sim.collectedCount}/3)`;
+            prompt = `🌀 时空撤离传送门未激活：需先收集 3 份免检材料 (${sim.collectedCount}/3)`;
           } else {
-            prompt = `正在刷卡进站撤离... ${(
+            prompt = `🌀 正在穿越时空传送门撤离... ${(
               WORLD_CONFIG.extractionHoldTime - sim.extractionTimer
             ).toFixed(1)}s`;
           }
@@ -1977,6 +2163,7 @@ export default function App() {
           carDistance: carDist,
           carHeadingLabel,
           carSeesPlayer: aiSystem.carCanSeePlayer,
+          activeMonitorCount: aiSystem.monitors.length,
         }));
       }
 
@@ -2004,6 +2191,7 @@ export default function App() {
       disposeHierarchy(playerRig.group);
       disposeHierarchy(worldData.worldRootGroup);
       aiSystem.dispose();
+      soundFX.stopBgm();
       mats.dispose();
       renderer.dispose();
     };
@@ -2051,27 +2239,39 @@ export default function App() {
         <div className="fixed inset-0 z-20 flex flex-col justify-between p-5 md:p-8 pointer-events-none bg-gradient-to-t from-[#0b0f19]/95 via-[#0b0f19]/45 to-[#0b0f19]/80 overflow-y-auto">
           <div className="flex items-center justify-between pointer-events-auto">
             <div className="text-xs font-mono-tabular tracking-wider text-slate-300">
-              OUT OF SIGHT · 3D 街道潜行躲猫猫游戏 · 多关卡投掷升级版
+              OUT OF SIGHT · 3D 街道潜行躲猫猫
             </div>
-            <div className="flex items-center gap-2.5">
-              <button
-                onClick={() => setGlbModalOpen(true)}
-                className="px-3.5 py-2 text-xs font-bold text-amber-300 bg-[#1e1b4b] hover:bg-indigo-900 border border-amber-400/60 rounded-lg transition-colors cursor-pointer whitespace-nowrap shrink-0"
+            <div className="flex flex-wrap items-center gap-2.5">
+              <select
+                value={bgmTrack}
+                onChange={(e) => handleSelectBgmTrack(e.target.value as BgmTrackId)}
+                className="px-2.5 py-1.5 text-xs font-medium text-amber-300 bg-[#111827] border border-slate-700 rounded-lg cursor-pointer outline-none"
+                title="切换可商用背景音乐 (BGM)"
               >
-                📦 GLB 模型管线 (导出/替换 .GLB)
-              </button>
-              <button
-                onClick={() => setBlueprintOpen(true)}
-                className="px-3.5 py-2 text-xs font-semibold text-slate-200 bg-[#111827] hover:bg-slate-800 border border-slate-700 rounded-lg transition-colors cursor-pointer whitespace-nowrap shrink-0"
-              >
-                查看完整策划案与参数
-              </button>
-              <button
-                onClick={toggleMute}
-                className="px-3.5 py-2 text-xs font-medium text-slate-300 bg-[#111827] hover:bg-slate-800 border border-slate-700 rounded-lg transition-colors cursor-pointer whitespace-nowrap shrink-0"
-              >
-                {isMuted ? '音效: 已静音' : '音效: 开启'}
-              </button>
+                {BGM_TRACKS.map((t) => (
+                  <option key={t.id} value={t.id} className="bg-[#0b0f19] text-slate-200">
+                    {t.name}
+                  </option>
+                ))}
+              </select>
+              <div className="flex items-center gap-2 px-3 py-1.5 bg-[#111827] border border-slate-700 rounded-lg">
+                <button
+                  onClick={toggleMute}
+                  className="text-xs font-medium text-slate-200 hover:text-amber-300 transition-colors cursor-pointer whitespace-nowrap"
+                >
+                  {isMuted ? '🔇 已静音' : `🔊 音量 ${Math.round(audioVolume * 100)}%`}
+                </button>
+                <input
+                  type="range"
+                  min="0"
+                  max="1"
+                  step="0.05"
+                  value={isMuted ? 0 : audioVolume}
+                  onChange={(e) => handleVolumeChange(parseFloat(e.target.value))}
+                  className="w-20 accent-amber-400 cursor-pointer"
+                  title="调节主音量"
+                />
+              </div>
             </div>
           </div>
 
@@ -2124,18 +2324,18 @@ export default function App() {
                 fontSize="19"
                 letterSpacing="4"
               >
-                视线之外 · 街头投掷恶搞 & 多关卡版
+                视线之外 · 街头潜行大作战
               </text>
             </svg>
 
             <p className="text-xs md:text-sm text-slate-200 max-w-3xl leading-relaxed mb-3.5">
-              新增 <span className="text-sky-300 font-bold">🪨 街角鹅卵石 / 🔧 修车合金扳手</span>：按 <kbd className="px-1.5 py-0.5 rounded bg-slate-800 border border-slate-600 text-amber-300 font-mono">G</kbd> 键投掷砸向保安或参保车，右下角会弹出 <span className="text-amber-300 font-semibold">1.8 秒受击表情/车体凹陷特写</span> 并激怒保安追逐！离开保安视野后保安仍会继续追击，脱离视线达到关卡阈值（{activeStageSpec.loseSightThresholdSec}s）才放弃追捕！
+              在「参保直通车」、巡逻保安与路口 <span className="text-sky-300 font-bold">📡 红外检测器</span> 的严密排查下，收集齐街区内的 <span className="text-amber-300 font-semibold">3 份免检材料</span> 并从东侧地铁口撤离！善用街角建筑、灌木丛与电话亭隐蔽行踪；拾取路边的 <span className="text-sky-300 font-semibold">🪨鹅卵石 / 🔧合金扳手</span> 按 <kbd className="px-1.5 py-0.5 rounded bg-slate-800 border border-slate-600 text-amber-300 font-mono">G</kbd> 键可投掷干扰目标，若被发现请迅速绕过街角摆脱视线！
             </p>
 
             {/* 1. CHOOSE STAGE / SCENE (3 Distinct Stages) */}
             <div className="mb-3.5">
               <div className="text-xs font-semibold text-sky-300 mb-1.5">
-                1. 选择挑战关卡与街景主题（不同场景光影、参保车超远视野与脱离阈值）：
+                1. 选择行动街区：
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
                 {(Object.keys(STAGE_CONFIGS) as StageId[]).map((sKey) => {
@@ -2154,14 +2354,14 @@ export default function App() {
                       <div className="flex items-center justify-between gap-1">
                         <span className="text-xs font-bold text-white">{st.name}</span>
                         <span className="text-[10px] px-1.5 py-0.5 rounded bg-sky-500/20 text-sky-300 font-mono-tabular">
-                          车视野 {st.carVisionRange}m
+                          车载探测 {st.carVisionRange}m
                         </span>
                       </div>
                       <div className="text-[11px] text-slate-300 mt-1 line-clamp-2">
                         {st.description}
                       </div>
                       <div className="text-[10px] text-amber-300 font-mono-tabular mt-1">
-                        脱离视野甩开阈值: {st.loseSightThresholdSec}秒 · 保安视野: ~15.5m
+                        摆脱追击需隐蔽: {st.loseSightThresholdSec}秒 · 含多处路口检测器
                       </div>
                     </button>
                   );
@@ -2169,10 +2369,10 @@ export default function App() {
               </div>
             </div>
 
-            {/* 2. CHOOSE 3D GLB PLAYER CHARACTER */}
+            {/* 2. CHOOSE 3D PLAYER CHARACTER */}
             <div className="mb-3.5">
               <div className="text-xs font-semibold text-amber-300 mb-1.5">
-                2. 选择出街玩家 GLB 角色（含参考图1同款「紫晶幻影·露娜」）：
+                2. 选择出战角色：
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2">
                 {(Object.keys(PLAYER_CHARACTERS) as PlayerCharacterId[]).map((cKey) => {
@@ -2198,7 +2398,7 @@ export default function App() {
                           />
                         ) : (
                           <div className="w-full h-full flex items-center justify-center text-[10px] text-slate-400">
-                            GLB头像
+                            角色头像
                           </div>
                         )}
                       </div>
@@ -2259,23 +2459,11 @@ export default function App() {
               >
                 进入【{activeStageSpec.name}】开始挑战 (Enter / Space)
               </button>
-              <button
-                onClick={() => setGlbModalOpen(true)}
-                className="px-5 py-3.5 text-sm font-semibold text-amber-300 bg-[#1e1b4b] hover:bg-indigo-900 border border-amber-400/50 rounded-lg transition-colors cursor-pointer whitespace-nowrap shrink-0"
-              >
-                📦 GLB 资产库
-              </button>
-              <button
-                onClick={() => setBlueprintOpen(true)}
-                className="px-5 py-3.5 text-sm font-semibold text-slate-200 bg-[#111827] hover:bg-slate-800 border border-slate-700 rounded-lg transition-colors cursor-pointer whitespace-nowrap shrink-0"
-              >
-                策划案系统拆解
-              </button>
             </div>
           </div>
 
           <div className="text-xs font-mono-tabular text-slate-400 pointer-events-auto">
-            WASD 移动 · Shift 冲刺 · [G] 投掷石头/扳手砸保安或参保车 · 离开保安视野保持 {activeStageSpec.loseSightThresholdSec}s 即可摆脱追捕
+            WASD 移动 · Shift 冲刺 · C 蹲伏 · E 互动/躲藏 · G 投掷道具 · 收集 3 份免检材料后前往东侧地铁口撤离
           </div>
         </div>
       )}
@@ -2517,7 +2705,7 @@ export default function App() {
               <div className="px-2 py-1.5 rounded-lg bg-slate-900/85 border border-slate-800 space-y-1">
                 <div className="flex items-center justify-between text-[10px]">
                   <span className="font-semibold text-slate-200">
-                    随机材料 ({hud.collectedIds.length}/3)
+                    免检材料 ({hud.collectedIds.length}/3)
                   </span>
                   <span
                     className={`font-mono-tabular font-bold px-1.5 py-0.5 rounded text-[9px] ${
@@ -2552,7 +2740,7 @@ export default function App() {
 
                 {hud.collectedIds.length === 3 && (
                   <div className="text-[10px] font-bold text-emerald-400 flex items-center justify-between pt-0.5">
-                    <span>→ 速去东街地铁口撤离!</span>
+                    <span>→ 速去东侧传送门撤离!</span>
                     {hud.extractionProgress > 0 && (
                       <span className="font-mono-tabular">{hud.extractionProgress}%</span>
                     )}
@@ -2737,13 +2925,13 @@ export default function App() {
                 <div className="flex-1 min-w-0 space-y-0.5">
                   <div className="text-[11px] font-extrabold text-white leading-tight">
                     {hud.hitReactionPopup.targetType === 'officer'
-                      ? `💢 保安暴怒！触发 ${hud.hitReactionPopup.boostDurationSec.toFixed(1)}s 随机加速追逐！`
-                      : `💥 参保车凹陷！全员保安 ${hud.hitReactionPopup.boostDurationSec.toFixed(1)}s 集体加速追捕！`}
+                      ? `💢 保安被激怒！开启 ${hud.hitReactionPopup.boostDurationSec.toFixed(1)} 秒全力追捕！`
+                      : `💥 参保车受创警报！全员保安开启 ${hud.hitReactionPopup.boostDurationSec.toFixed(1)} 秒集体围捕！`}
                   </div>
                   <div className="text-[10px] text-amber-300 font-semibold">
                     {hud.hitReactionPopup.targetType === 'officer'
-                      ? `⚡ 单体追击移速 +45% (5~10s 随机: ${hud.hitReactionPopup.boostDurationSec.toFixed(1)}秒)`
-                      : `⚡ 全员保安出动 · 集体移速 +45% (5~10s 随机: ${hud.hitReactionPopup.boostDurationSec.toFixed(1)}秒)`}
+                      ? '⚡ 追捕移速大幅提升，快绕过街角或钻入电话亭摆脱！'
+                      : '⚡ 全员保安加速出动，注意隐蔽行踪！'}
                   </div>
                 </div>
               </div>
@@ -2997,95 +3185,171 @@ export default function App() {
                   className="w-full accent-amber-400 cursor-pointer"
                 />
               </div>
-              <div className="flex flex-col justify-between">
-                <div className="text-xs text-slate-300 mb-1">🎥 镜头距离与音效</div>
+              <div className="flex flex-col justify-between gap-2">
+                <div className="flex items-center justify-between text-xs text-slate-300">
+                  <span>🔊 音效音量与镜头距离</span>
+                  <span className="font-mono-tabular text-amber-300 font-bold">
+                    {isMuted ? '静音' : `${Math.round(audioVolume * 100)}%`}
+                  </span>
+                </div>
                 <div className="flex items-center gap-2">
+                  <input
+                    type="range"
+                    min="0"
+                    max="1"
+                    step="0.05"
+                    value={isMuted ? 0 : audioVolume}
+                    onChange={(e) => handleVolumeChange(parseFloat(e.target.value))}
+                    className="w-24 accent-amber-400 cursor-pointer"
+                  />
                   <button
                     onClick={() =>
-                    setCameraDistancePreset((prev) =>
-                      prev === 'near' ? 'standard' : prev === 'standard' ? 'tactical' : 'near'
-                    )
-                  }
-                  className="flex-1 py-1.5 px-2.5 text-xs font-semibold rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 cursor-pointer"
-                >
-                  镜头: {cameraDistancePreset === 'near' ? '近距' : cameraDistancePreset === 'tactical' ? '高空' : '标准'}
-                </button>
-                <button
-                  onClick={toggleMute}
-                  className="py-1.5 px-3 text-xs font-semibold rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 cursor-pointer"
-                >
-                  {isMuted ? '🔇 静音' : '🔊 音效'}
-                </button>
+                      setCameraDistancePreset((prev) =>
+                        prev === 'near' ? 'standard' : prev === 'standard' ? 'tactical' : 'near'
+                      )
+                    }
+                    className="flex-1 py-1.5 px-2 text-xs font-semibold rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 cursor-pointer whitespace-nowrap"
+                  >
+                    镜头: {cameraDistancePreset === 'near' ? '近距' : cameraDistancePreset === 'tactical' ? '高空' : '标准'}
+                  </button>
+                  <button
+                    onClick={toggleMute}
+                    className="py-1.5 px-2.5 text-xs font-semibold rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 cursor-pointer whitespace-nowrap"
+                  >
+                    {isMuted ? '🔇' : '🔊'}
+                  </button>
+                </div>
               </div>
+            </div>
+
+            {/* Commercial-Safe Background Music (BGM) Selector */}
+            <div className="p-3 rounded-xl bg-[#0b0f19]/90 border border-slate-800 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2">
+              <div className="text-xs text-slate-300">
+                <span className="font-bold text-amber-300">🎶 商业级免版权背景音乐 (BGM)：</span>
+                <span className="text-[11px] text-slate-400 ml-1">
+                  {BGM_TRACKS.find((t) => t.id === bgmTrack)?.license}
+                </span>
+              </div>
+              <select
+                value={bgmTrack}
+                onChange={(e) => handleSelectBgmTrack(e.target.value as BgmTrackId)}
+                className="px-3 py-1.5 text-xs font-semibold text-amber-300 bg-slate-900 border border-slate-700 rounded-lg cursor-pointer outline-none w-full sm:w-auto"
+              >
+                {BGM_TRACKS.map((t) => (
+                  <option key={t.id} value={t.id} className="bg-[#0b0f19] text-slate-200">
+                    {t.name}
+                  </option>
+                ))}
+              </select>
             </div>
           </div>
         </div>
-      </div>
-    )}
+      )}
 
-      {/* 5. VICTORY OVERLAY (With Next Stage Progression!) */}
+      {/* 5. VICTORY OVERLAY: OFFICIAL CLEARANCE HONOR CERTIFICATE ("街区潜行免检通关荣誉证书") */}
       {phase === 'victory' && (
-        <div className="fixed inset-0 z-30 flex items-center justify-center bg-[#0b0f19]/90 p-4">
-          <div className="bg-[#111827] border border-emerald-500/50 rounded-xl max-w-md w-full p-6 shadow-2xl space-y-4">
-            <div className="flex items-center gap-3">
-              {activePortraitUrl && (
-                <img
-                  src={activePortraitUrl}
-                  alt={activeCharSpec.name}
-                  className="w-14 h-14 rounded-xl border-2 border-emerald-400 object-cover"
-                />
-              )}
-              <div>
-                <div className="text-xs font-mono-tabular uppercase tracking-widest text-emerald-400">
-                  STAGE CLEARED · 成功逃离参保封锁区
+        <div className="fixed inset-0 z-30 flex items-center justify-center bg-[#0b0f19]/92 p-4 overflow-y-auto">
+          <div className="bg-[#ecfdf5] text-slate-900 border-4 border-emerald-700 rounded-2xl max-w-xl w-full p-6 shadow-2xl relative">
+            <div className="border-2 border-emerald-500/80 rounded-xl p-5 space-y-4 relative">
+              {/* Official Honor Seal Stamp in Bottom-Right of Certificate Card */}
+              <div className="hidden sm:flex pointer-events-none absolute right-5 bottom-16 w-24 h-24 rounded-full border-4 border-emerald-600/80 flex-col items-center justify-center text-emerald-700/85 font-extrabold -rotate-12 select-none">
+                <span className="text-[9px] tracking-tighter">街区潜行委员会</span>
+                <span className="text-xs border-y border-emerald-600/70 px-1 my-0.5">
+                  免检通关章
+                </span>
+                <span className="text-sm">★</span>
+              </div>
+
+              <div className="text-center border-b-2 border-emerald-200 pb-3">
+                <div className="text-[11px] font-mono-tabular tracking-widest text-emerald-800 font-semibold">
+                  街区潜行委员会 · 免参保通关荣誉认证 ({hud.certificateNo})
                 </div>
-                <h2 className="text-xl font-bold text-white mt-0.5">
-                  【{activeStageSpec.name}】通关成功！
+                <h2 className="text-2xl font-extrabold text-emerald-950 tracking-wide mt-1">
+                  《 街区潜行免检通关荣誉证书 》
                 </h2>
+                <div className="text-xs text-emerald-700 font-semibold mt-1">
+                  恭喜成功集齐 3 份免检材料并穿越【东侧时空撤离传送门】全身而退！
+                </div>
               </div>
-            </div>
-            <p className="text-xs text-slate-300 leading-relaxed">
-              你成功集齐 3 份免检材料，巧妙利用街角鹅卵石/扳手与脱离视野阈值甩开保安，从东侧地铁口全身而退，成功免缴本轮累计的{' '}
-              <strong className="text-amber-300 font-mono-tabular">
-                {formatCurrency(hud.contributionAmount)}
-              </strong>{' '}
-              参保金！
-            </p>
 
-            <div className="grid grid-cols-3 gap-2 py-2 border-y border-slate-800 text-center">
-              <div>
-                <div className="text-[11px] text-slate-400">剩余时间</div>
-                <div className="text-base font-bold font-mono-tabular text-white">
-                  {formatTime(hud.timeRemaining)}
+              <div className="flex flex-col sm:flex-row items-center sm:items-start gap-4">
+                <div className="flex flex-col items-center shrink-0">
+                  <div className="w-28 h-36 rounded-lg overflow-hidden border-2 border-emerald-700 bg-slate-900 shadow-md">
+                    {activePortraitUrl ? (
+                      <img
+                        src={activePortraitUrl}
+                        alt={activeCharSpec.name}
+                        className="w-full h-full object-cover"
+                      />
+                    ) : (
+                      <div className="w-full h-full flex items-center justify-center text-xs text-slate-300">
+                        玩家头像
+                      </div>
+                    )}
+                  </div>
+                  <span className="mt-1.5 text-[11px] font-bold text-emerald-900 bg-emerald-200/80 px-2 py-0.5 rounded">
+                    荣誉通关者证件照
+                  </span>
                 </div>
-              </div>
-              <div>
-                <div className="text-[11px] text-slate-400">被发现次数</div>
-                <div className="text-base font-bold font-mono-tabular text-amber-400">
-                  {hud.timesSpotted} 次
-                </div>
-              </div>
-              <div>
-                <div className="text-[11px] text-slate-400">成功规避金额</div>
-                <div className="text-base font-bold font-mono-tabular text-emerald-400">
-                  {formatCurrency(hud.contributionAmount)}
-                </div>
-              </div>
-            </div>
 
-            <div className="flex items-center justify-end gap-3 pt-1">
-              <button
-                onClick={() => setPhase('title')}
-                className="px-4 py-2 text-xs font-medium text-slate-300 bg-slate-800 hover:bg-slate-700 rounded-lg cursor-pointer whitespace-nowrap shrink-0"
-              >
-                返回主界面
-              </button>
-              <button
-                onClick={() => startStreetStroll(undefined, nextStageId)}
-                className="px-5 py-2 text-xs font-bold text-slate-950 bg-emerald-400 hover:bg-emerald-300 rounded-lg cursor-pointer whitespace-nowrap shrink-0"
-              >
-                挑战下一关：{STAGE_CONFIGS[nextStageId].name} →
-              </button>
+                <div className="flex-1 space-y-2 text-xs w-full">
+                  <div className="flex items-center justify-between py-1 border-b border-emerald-200/80">
+                    <span className="text-slate-600 font-medium">荣誉通关潜行者：</span>
+                    <span className="font-bold text-slate-900">
+                      {activeCharSpec.name}（{activeCharSpec.title}）
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between py-1 border-b border-emerald-200/80">
+                    <span className="text-slate-600 font-medium">通关街区场景：</span>
+                    <span className="font-bold text-slate-900">{activeStageSpec.name}</span>
+                  </div>
+                  <div className="flex items-center justify-between py-1 border-b border-emerald-200/80">
+                    <span className="text-slate-600 font-medium">周旋时长 / 剩余时间：</span>
+                    <span className="font-mono-tabular font-bold text-emerald-900">
+                      {hud.totalHidingSeconds} 秒（余 {formatTime(hud.timeRemaining)}）
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between py-1 border-b border-emerald-200/80">
+                    <span className="text-slate-600 font-medium">全图警报暴露次数：</span>
+                    <span className="font-mono-tabular font-bold text-slate-900">
+                      {hud.timesSpotted} 次
+                    </span>
+                  </div>
+
+                  <div className="p-3 rounded-lg bg-emerald-100/90 border border-emerald-400 mt-2">
+                    <div className="text-[11px] font-semibold text-emerald-900">
+                      核定成功规避参保金额（全额免缴认证）：
+                    </div>
+                    <div className="text-2xl font-extrabold font-mono-tabular text-emerald-700 mt-0.5">
+                      {formatCurrency(hud.contributionAmount)}.00 元
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center justify-between gap-2 pt-3 border-t border-emerald-200">
+                <button
+                  onClick={downloadVictoryCertificateImage}
+                  className="px-4 py-2 text-xs font-bold text-emerald-950 bg-emerald-300 hover:bg-emerald-400 border border-emerald-600 rounded-lg cursor-pointer whitespace-nowrap shrink-0"
+                >
+                  📥 保存《通关荣誉证书》图片 (含头像)
+                </button>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setPhase('title')}
+                    className="px-3.5 py-2 text-xs font-semibold text-slate-700 bg-emerald-100 hover:bg-emerald-200 border border-emerald-300 rounded-lg cursor-pointer whitespace-nowrap shrink-0"
+                  >
+                    返回主界面
+                  </button>
+                  <button
+                    onClick={() => startStreetStroll(undefined, nextStageId)}
+                    className="px-5 py-2 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-500 rounded-lg shadow-md cursor-pointer whitespace-nowrap shrink-0"
+                  >
+                    挑战下一关：{STAGE_CONFIGS[nextStageId].name} →
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -3124,7 +3388,7 @@ export default function App() {
                     )}
                   </div>
                   <span className="mt-1.5 text-[11px] font-bold text-amber-900 bg-amber-200/80 px-2 py-0.5 rounded">
-                    登记人 3D 证件照
+                    登记人证件照
                   </span>
                 </div>
 
@@ -3188,23 +3452,6 @@ export default function App() {
           </div>
         </div>
       )}
-
-      {/* 7. FULL DESIGN BLUEPRINT MODAL */}
-      <BlueprintModal
-        isOpen={blueprintOpen}
-        onClose={() => setBlueprintOpen(false)}
-        selectedMode={playstyle}
-        onSelectMode={(m) => setPlaystyle(m)}
-      />
-
-      {/* 8. GLB 3D ASSET PIPELINE MODAL */}
-      <GLBAssetModal
-        isOpen={glbModalOpen}
-        onClose={() => setGlbModalOpen(false)}
-        onCustomGLBUploaded={() => {
-          simRef.current.characterSwapRequested = true;
-        }}
-      />
     </div>
   );
 }

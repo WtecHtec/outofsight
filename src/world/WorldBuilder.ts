@@ -20,6 +20,7 @@ import {
   createCountryFenceAndBarrelsProp,
   createCountryShedHidingModel,
   createCountrysideCottageMesh,
+  createExtractionPortalModel,
   createFireHydrantProp,
   createHaystackBushProp,
   createHidingLockerModel,
@@ -1315,9 +1316,9 @@ export function buildGameWorld(
   });
 
   // ============================================================================
-  // 9. SUBWAY / DOCK / STATION EXTRACTION ZONE ([52, 0, 18])
+  // 9. DIMENSIONAL ESCAPE PORTAL EXTRACTION ZONE ([52, 0, 18])
   // ============================================================================
-  const extractionBeacon = new THREE.Group();
+  const extractionBeacon = createExtractionPortalModel(mats);
   extractionBeacon.position.set(
     EXTRACTION_POINT.position[0],
     0,
@@ -1327,7 +1328,7 @@ export function buildGameWorld(
   const ringGeo = new THREE.RingGeometry(
     EXTRACTION_POINT.radius - 0.35,
     EXTRACTION_POINT.radius,
-    36
+    48
   );
   ringGeo.rotateX(-Math.PI / 2);
   const extractionRing = new THREE.Mesh(ringGeo, mats.extractionEmerald);
@@ -1337,20 +1338,6 @@ export function buildGameWorld(
     EXTRACTION_POINT.position[2]
   );
   worldRootGroup.add(extractionRing);
-
-  const archLeft = new THREE.Mesh(
-    new THREE.BoxGeometry(0.4, 3.4, 0.4),
-    mats.extractionEmerald
-  );
-  archLeft.position.set(-2.2, 1.7, 0);
-  const archRight = archLeft.clone();
-  archRight.position.x = 2.2;
-  const archTop = new THREE.Mesh(
-    new THREE.BoxGeometry(5.2, 0.55, 0.6),
-    mats.extractionEmerald
-  );
-  archTop.position.set(0, 3.5, 0);
-  extractionBeacon.add(archLeft, archRight, archTop);
   worldRootGroup.add(extractionBeacon);
 
   // ============================================================================

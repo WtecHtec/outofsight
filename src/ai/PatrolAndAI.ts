@@ -84,6 +84,12 @@ export interface OfficerAgent {
   deployedFromCar?: boolean; // 是否为参保车动态下放的保安（不限总数）
   deployedRemainingSec?: number; // 该保安独立的地面搜捕剩余时长（发现玩家即重置刷新）
   returnTimer?: number; // 归队返回计时（超时则在附近哨亭交接归队）
+  // 建筑绕行导航与防卡死状态
+  navDetourTarget?: THREE.Vector3 | null;
+  navDetourTimer?: number;
+  lastProgressPos?: THREE.Vector3;
+  stuckTimer?: number;
+  stuckCount?: number;
 }
 
 const _raycaster = new THREE.Raycaster();
@@ -92,8 +98,28 @@ const _targetPos = new THREE.Vector3();
 const _dirToPlayer = new THREE.Vector3();
 const _forwardVec = new THREE.Vector3();
 const _moveVec = new THREE.Vector3();
+const _steeredVec = new THREE.Vector3();
 const _tmpForward = new THREE.Vector3();
 const _tmpToTarget = new THREE.Vector3();
+
+// Pre-computed orthogonal street & sidewalk intersection nodes for building detour routing
+const STREET_NAV_NODES: ReadonlyArray<readonly [number, number]> = [
+  [-44, -34], [-22, -34], [0, -34], [20, -34], [38, -34],
+  [-44, -10.5], [-24, -10.5], [0, -10.5], [24, -10.5], [38, -10.5],
+  [-44, 0], [-22, 0], [0, 0], [20, 0], [38, 0],
+  [-44, 10.5], [-24, 10.5], [0, 10.5], [24, 10.5], [38, 10.5],
+  [-44, 29], [-20, 29], [0, 29], [18, 29], [38, 29],
+];
+
+const FEELER_ANGLES: ReadonlyArray<number> = [
+  0,
+  0.38, -0.38,   // ±22°
+  0.78, -0.78,   // ±45°
+  1.18, -1.18,   // ±68°
+  1.60, -1.60,   // ±92°
+  2.09, -2.09,   // ±120°
+  2.62, -2.62,   // ±150°
+];
 
 export interface ThrowTargetResult {
   hasTarget: boolean;
@@ -255,7 +281,7 @@ export class PatrolAndAISystem {
           new THREE.Vector3(-20, 0, -34),
           new THREE.Vector3(0, 0, -34),
           new THREE.Vector3(0, 0, 0),
-          new THREE.Vector3(-22, 0, 0),
+          new THREE.Vector3(-44, 0, 0),
         ],
         patrolIndex: 0,
         waypointsVisitedSinceSweep: 0,
@@ -294,7 +320,7 @@ export class PatrolAndAISystem {
           new THREE.Vector3(38, 0, -34),
           new THREE.Vector3(18, 0, -34),
           new THREE.Vector3(0, 0, -34),
-          new THREE.Vector3(20, 0, 0),
+          new THREE.Vector3(0, 0, 0),
         ],
         patrolIndex: 0,
         waypointsVisitedSinceSweep: 0,
@@ -322,14 +348,14 @@ export class PatrolAndAISystem {
         currentSearchTarget: null,
         patrolRoute: [
           new THREE.Vector3(38, 0, 0),
-          new THREE.Vector3(24, 0, 10.5),
-          new THREE.Vector3(-24, 0, 10.5),
-          new THREE.Vector3(-44, 0, 0),
+          new THREE.Vector3(38, 0, 10.5),
+          new THREE.Vector3(-44, 0, 10.5),
           new THREE.Vector3(-44, 0, 29),
           new THREE.Vector3(0, 0, 29),
           new THREE.Vector3(38, 0, 29),
           new THREE.Vector3(38, 0, -34),
           new THREE.Vector3(-44, 0, -34),
+          new THREE.Vector3(-44, 0, 0),
         ],
         patrolIndex: 0,
         waypointsVisitedSinceSweep: 0,
@@ -357,10 +383,12 @@ export class PatrolAndAISystem {
         currentSearchTarget: null,
         patrolRoute: [
           new THREE.Vector3(-24, 0, 10.5),
+          new THREE.Vector3(0, 0, 10.5),
           new THREE.Vector3(0, 0, 29),
+          new THREE.Vector3(0, 0, -10.5),
           new THREE.Vector3(24, 0, -10.5),
           new THREE.Vector3(-44, 0, -10.5),
-          new THREE.Vector3(12, 0, 0),
+          new THREE.Vector3(-44, 0, 10.5),
         ],
         patrolIndex: 0,
         waypointsVisitedSinceSweep: 0,
@@ -387,11 +415,12 @@ export class PatrolAndAISystem {
         visionBoostActive: false,
         currentSearchTarget: null,
         patrolRoute: [
-          new THREE.Vector3(20, 0, 0),
+          new THREE.Vector3(0, 0, 0),
           new THREE.Vector3(0, 0, -34),
-          new THREE.Vector3(-44, 0, 10.5),
+          new THREE.Vector3(-44, 0, -34),
+          new THREE.Vector3(-44, 0, 29),
           new THREE.Vector3(38, 0, 29),
-          new THREE.Vector3(-12, 0, -4),
+          new THREE.Vector3(38, 0, 0),
         ],
         patrolIndex: 0,
         waypointsVisitedSinceSweep: 0,
@@ -485,13 +514,14 @@ export class PatrolAndAISystem {
     this.carDeployCooldown = 0;
     this.initialDeploymentCompleted = false;
 
-    // 清理并释放街区监控仪 GPU 几何体与材质
+    // 清理并释放街区监控仪 GPU 几何体与材质，并立即在全图关键路口预布设 8 台红外扫描检测器！
     this.monitors.forEach((m) => {
       this.scene.remove(m.rig.group);
       this.disposeObjectHierarchy(m.rig.group);
     });
     this.monitors = [];
-    this.monitorDropTimer = 18.0;
+    this.monitorDropTimer = 8.0;
+    this.deployInitialStreetMonitors();
 
     this.campAnchorPos.set(-36, 0, 4);
     this.campTimer = 0;
@@ -694,8 +724,8 @@ export class PatrolAndAISystem {
       camPos.set(this.carPosition.x - 9.5, 3.2, 8.2);
       camLook.set(this.carPosition.x + 1.5, 1.3, 0);
 
-      captionTitle = '🚨 突发状况！一辆「参保直通车」疾驰冲入街区！';
-      captionSubtitle = `全图环线巡航已启动（车载探照视野 ${this.currentStageConfig.carVisionRange}m），严禁在同一地点久留！`;
+      captionTitle = '🚨 警报拉响！「参保直通车」疾驰驶入街区！';
+      captionSubtitle = `巡逻车已启动全图环线巡查（前方探照视野 ${this.currentStageConfig.carVisionRange}m），切勿在同一地点久留！`;
     } else if (cutsceneTime < 3.8) {
       this.carPosition.set(-12, 0, 0);
       this.carRig.group.position.copy(this.carPosition);
@@ -755,9 +785,9 @@ export class PatrolAndAISystem {
       camPos.set(-18.5, 2.6, 8.2);
       camLook.set(-12, 1.4, 1.8);
 
-      captionTitle = '👮 保安小队全图分片巡逻！动态热力排查每一处街角！';
+      captionTitle = '👮 保安小队全街区拉网巡查，多处路口已架设红外检测器！';
       captionSubtitle =
-        '保安队长·老王：“全场景拉网排查！谁要是在同一个地方久留，立刻包抄抓人！”';
+        '保安队长·老王：“各路口检测器已就位，全街区展开巡查，发现目标立即合围抓人！”';
     } else {
       const closeT = THREE.MathUtils.clamp((cutsceneTime - 3.8) / 0.5, 0, 1);
       this.carRig.slidingDoor.position.z = THREE.MathUtils.lerp(-1.25, 0, closeT);
@@ -776,8 +806,8 @@ export class PatrolAndAISystem {
         smoothSweep
       );
 
-      captionTitle = '🪨 投掷石头/扳手触发保安 5~10 秒随机狂暴加速追逐！';
-      captionSubtitle = `3份任务材料已随机分布在街区各处；离开视野并保持 ${this.currentStageConfig.loseSightThresholdSec.toFixed(1)} 秒即可甩开追捕！`;
+      captionTitle = '📁 集齐 3 份免检材料，从东侧地铁口安全撤离！';
+      captionSubtitle = `避开路面红外检测器与保安视线；若被追捕，绕过街角遮挡视线满 ${this.currentStageConfig.loseSightThresholdSec.toFixed(1)} 秒即可甩开追击！`;
     }
 
     if (cutsceneTime >= 5.2) {
@@ -899,7 +929,7 @@ export class PatrolAndAISystem {
       hitOff.lastKnownPlayerPos = playerPos.clone();
 
       this.carRadioAlertTimer = 3.0;
-      this.carRadioMessage = `💢 ${hitOff.name} 被砸中激怒！触发 ${randomBoostSec.toFixed(1)} 秒随机狂暴加速追逐 (移速 +45%)！`;
+      this.carRadioMessage = `💢 ${hitOff.name} 被砸中激怒！开启 ${randomBoostSec.toFixed(1)} 秒全力狂暴追捕！`;
 
       // Face the player who threw the item
       const dir = new THREE.Vector3().subVectors(playerPos, hitOff.position);
@@ -912,7 +942,7 @@ export class PatrolAndAISystem {
       this.carHitDentTimer = 1.85;
       this.collectiveThrowBoostTimer = randomBoostSec;
       this.carRadioAlertTimer = 3.2;
-      this.carRadioMessage = `💥 「参保直通车」被砸凹！触发全员保安 ${randomBoostSec.toFixed(1)} 秒集体狂暴加速追捕！`;
+      this.carRadioMessage = `💥 「参保直通车」遭投掷袭击！全员保安开启 ${randomBoostSec.toFixed(1)} 秒集体加速围捕！`;
 
       // If Officer C is inside the van, deploy Officer C immediately!
       const offC = this.officers[2];
@@ -1237,7 +1267,7 @@ export class PatrolAndAISystem {
           soundFX.playAlertPing('spotted');
           if (this.carRadioAlertTimer <= 0) {
             this.carRadioAlertTimer = 2.8;
-            this.carRadioMessage = `👁️ 进入 ${off.name} 视野！保安已开启视野加速追捕 (+38%移速)，摆脱视野后才减速！`;
+            this.carRadioMessage = `👁️ 被 ${off.name} 发现了！保安正在加速追捕，快利用街角或电话亭摆脱视线！`;
           }
         }
         this.setOfficerLastKnownPos(off, playerPos);
@@ -1280,7 +1310,7 @@ export class PatrolAndAISystem {
             this.lastKnownPositionMarker.visible = false;
 
             this.escapeBannerTimer = 2.8;
-            this.escapeBannerMessage = `💨 摆脱视野满 ${loseSightThreshold.toFixed(1)} 秒！${off.name} 已停止视野加速并放弃追捕！`;
+            this.escapeBannerMessage = `💨 成功脱离视线满 ${loseSightThreshold.toFixed(1)} 秒！${off.name} 已失去目标并放弃追捕！`;
           }
         } else {
           off.visionBoostActive = false;
@@ -1424,11 +1454,11 @@ export class PatrolAndAISystem {
         this.carSpeed = THREE.MathUtils.damp(this.carSpeed, targetSpeed, 3.5, dt);
         this.moveCarAlongRoute(targetNode.pos, dt);
 
-        // 核心策划机制：参保车巡逻时适量布设监控侦测器（场上最多 2 台，间隔 28~34 秒）
-        if (this.carSpeed > 1.2 && this.monitors.length < 2) {
+        // 参保车巡逻时持续在路面布设红外扫描检测器（场上最多同时保持 12 台，每 9~13 秒增设一台）
+        if (this.carSpeed > 1.0 && this.monitors.length < 12) {
           this.monitorDropTimer -= dt;
           if (this.monitorDropTimer <= 0) {
-            this.monitorDropTimer = 28.0 + Math.random() * 6.0;
+            this.monitorDropTimer = 9.0 + Math.random() * 4.0;
             this.dropStreetMonitor(world.colliders);
           }
         }
@@ -1942,19 +1972,36 @@ export class PatrolAndAISystem {
     }
 
     if (targetPoint && moveSpeed > 0) {
-      _moveVec.subVectors(targetPoint, off.position);
-      _moveVec.y = 0;
-      const dist = _moveVec.length();
-      if (dist > 0.1) {
-        _moveVec.normalize();
-        const desiredYaw = Math.atan2(_moveVec.x, _moveVec.z);
+      const distToFinal = Math.hypot(
+        targetPoint.x - off.position.x,
+        targetPoint.z - off.position.z
+      );
+      if (distToFinal > 0.1) {
+        this.computeNavigatedMoveDirection(
+          off,
+          targetPoint,
+          moveSpeed,
+          dt,
+          world.colliders,
+          _steeredVec
+        );
+
+        const desiredYaw = Math.atan2(_steeredVec.x, _steeredVec.z);
         let diff = desiredYaw - off.rotationY;
         while (diff > Math.PI) diff -= Math.PI * 2;
         while (diff < -Math.PI) diff += Math.PI * 2;
-        off.rotationY += diff * Math.min(1, dt * 5.2);
+        off.rotationY += diff * Math.min(1, dt * 7.5);
 
-        this.moveAgentWithCollision(off.position, _moveVec, moveSpeed * dt, world.colliders);
+        this.moveAgentWithCollision(
+          off.position,
+          _steeredVec,
+          moveSpeed * dt,
+          world.colliders
+        );
       }
+    } else {
+      off.navDetourTarget = null;
+      off.navDetourTimer = 0;
     }
 
     // Anti-Stuck Check: Always guarantee agent is pushed out of any building/obstacle colliders!
@@ -1999,10 +2046,64 @@ export class PatrolAndAISystem {
   }
 
   /**
-  * Drops a Surveillance Monitor / Camera Tripod from the Patrol Car onto the street
-  */
+   * Pre-deploys 8 360°-Rotating Surveillance Detectors across key open street intersections & avenues at the start of every stage
+   */
+  public deployInitialStreetMonitors() {
+    const initialSpots: ReadonlyArray<readonly [number, number, number]> = [
+      [-12, -1.5, 0],                 // 西侧主干道十字口（360° 全向环视）
+      [2, 0.0, Math.PI * 0.5],        // 中央十字路口核心（360° 全向环视）
+      [24, 1.8, Math.PI],             // 东侧主干道中央（360° 全向环视）
+      [0, -18.0, Math.PI * 0.25],     // 中北纵街通道（360° 全向环视）
+      [0, 16.0, Math.PI * 1.25],      // 中南纵街通道（360° 全向环视）
+      [-24, -33.5, Math.PI * 0.75],   // 西北横街大道（360° 全向环视）
+      [18, -33.5, Math.PI * 1.5],     // 东北广场大道（360° 全向环视）
+      [20, 29.0, Math.PI * 0.35],     // 东南咖啡街区大道（360° 全向环视）
+    ];
+
+    initialSpots.forEach(([mx, mz, baseYaw], idx) => {
+      const rig = createStreetMonitorModel(this.mats);
+      const pos = new THREE.Vector3(mx, 0, mz);
+      rig.group.position.copy(pos);
+      const initialSweep = ((idx * 0.78) % (Math.PI * 2));
+      rig.cameraHead.rotation.y = baseYaw + initialSweep;
+      this.scene.add(rig.group);
+
+      this.monitors.push({
+        id: `mon_init_${idx}_${Date.now()}`,
+        rig,
+        position: pos,
+        baseYaw,
+        sweepAngle: initialSweep,
+        sweepDirection: idx % 2 === 0 ? 1 : -1,
+        detectionRadius: 8.5,
+        isTriggered: false,
+      });
+    });
+  }
+
+  /**
+   * Keeps all street detectors rotating 360 degrees visually during title/cutscene phases
+   */
+  public updateMonitorsVisualRotation(dt: number) {
+    if (this.monitors.length === 0) return;
+    const isBlink = (Date.now() % 500) < 250;
+    for (let i = 0; i < this.monitors.length; i++) {
+      const m = this.monitors[i];
+      if (m.isTriggered) continue;
+      m.sweepAngle = (m.sweepAngle + dt * 1.65 * m.sweepDirection) % (Math.PI * 2);
+      if (m.sweepAngle < 0) m.sweepAngle += Math.PI * 2;
+      m.rig.cameraHead.rotation.y = m.baseYaw + m.sweepAngle;
+      (m.rig.statusLed.material as THREE.MeshBasicMaterial).color.setHex(
+        isBlink ? 0x38bdf8 : 0x0284c7
+      );
+    }
+  }
+
+  /**
+   * Drops a 360°-Rotating Surveillance Monitor / Camera Tripod from the Patrol Car onto the street
+   */
   public dropStreetMonitor(colliders: ColliderBox[]) {
-    if (this.monitors.length >= 2) {
+    if (this.monitors.length >= 12) {
       const oldest = this.monitors.shift();
       if (oldest) {
         this.scene.remove(oldest.rig.group);
@@ -2016,28 +2117,37 @@ export class PatrolAndAISystem {
     );
     const monitorPos = this.carPosition.clone().add(sideOffset);
     monitorPos.y = 0;
-    this.resolveColliderPenetration(monitorPos, 0.6, colliders);
+    this.resolveColliderPenetration(monitorPos, 0.75, colliders);
+
+    // Avoid stacking on top of an existing monitor
+    for (let i = 0; i < this.monitors.length; i++) {
+      if (this.monitors[i].position.distanceTo(monitorPos) < 5.5) {
+        return;
+      }
+    }
 
     const rig = createStreetMonitorModel(this.mats);
     rig.group.position.copy(monitorPos);
+    const baseYaw = this.carRotationY + Math.PI / 2;
+    rig.cameraHead.rotation.y = baseYaw;
     this.scene.add(rig.group);
 
     const monitor: ActiveStreetMonitor = {
       id: `mon_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
       rig,
       position: monitorPos,
-      baseYaw: this.carRotationY + Math.PI / 2,
+      baseYaw,
       sweepAngle: 0,
-      sweepDirection: 1,
-      detectionRadius: 7.5,
+      sweepDirection: this.monitors.length % 2 === 0 ? 1 : -1,
+      detectionRadius: 8.5,
       isTriggered: false,
     };
     this.monitors.push(monitor);
     soundFX.playMonitorDeploy();
 
-    this.carRadioAlertTimer = 3.8;
+    this.carRadioAlertTimer = 3.5;
     this.carRadioMessage =
-      '📡 参保直通车在路面布设了【红外扫描监控仪】！探测到违规未参保人员将调遣特勤保安！';
+      '📡 参保直通车在街区新增了【360°旋转红外检测器】，请注意观察路面扫描扇区！';
   }
 
   public removeMonitor(monitor: ActiveStreetMonitor) {
@@ -2047,8 +2157,8 @@ export class PatrolAndAISystem {
   }
 
   /**
-   * Updates street surveillance monitors placed by the patrol car.
-   * Sweeps scanning cone, checks player proximity & line-of-sight.
+   * Updates street surveillance monitors placed across the street.
+   * Continuously rotates 360 degrees (0 ~ 2π), checking player proximity & 360° rotating vision sector.
    * When player is spotted: alarms, removes the monitor, and deploys a security guard!
    */
   public updateStreetMonitors(
@@ -2058,20 +2168,21 @@ export class PatrolAndAISystem {
     isHidingInLocker: boolean,
     isInBush: boolean,
     colliders: ColliderBox[]
-  ) {
-    if (this.monitors.length === 0) return;
+  ): boolean {
+    if (this.monitors.length === 0) return false;
+    let anyTriggered = false;
 
     for (let i = this.monitors.length - 1; i >= 0; i--) {
       const m = this.monitors[i];
       if (m.isTriggered) continue;
 
-      // Sweep camera head left and right (+- 42 degrees)
-      m.sweepAngle += dt * 1.5 * m.sweepDirection;
-      if (Math.abs(m.sweepAngle) > 0.75) {
-        m.sweepDirection *= -1;
-        m.sweepAngle = Math.sign(m.sweepAngle) * 0.75;
+      // Full 360-degree continuous panoramic rotation (0 to 2π, ~95°/sec)
+      m.sweepAngle = (m.sweepAngle + dt * 1.65 * m.sweepDirection) % (Math.PI * 2);
+      if (m.sweepAngle < 0) {
+        m.sweepAngle += Math.PI * 2;
       }
-      m.rig.cameraHead.rotation.y = m.baseYaw + m.sweepAngle;
+      const camYaw = m.baseYaw + m.sweepAngle;
+      m.rig.cameraHead.rotation.y = camYaw;
 
       // Status LED pulse
       const isBlink = (Date.now() % 500) < 250;
@@ -2079,31 +2190,41 @@ export class PatrolAndAISystem {
         isBlink ? 0x38bdf8 : 0x0284c7
       );
 
-      // Player in telephone booth is immune!
+      // Player inside a closed telephone booth / cabana / shed is immune
       if (isHidingInLocker) continue;
 
-      // Detection check
+      // Detection range matches the 8.5m visual ground laser sector (+0.35m for player body radius)
+      // Only deep bush crouch cover reduces effective laser reach
       const effectiveRange =
-        isInBush && isCrouching ? 2.8 : isInBush ? 4.0 : isCrouching ? 5.2 : m.detectionRadius;
+        isInBush && isCrouching ? 4.2 : m.detectionRadius + 0.35;
 
       _dirToPlayer.subVectors(playerPos, m.position);
       _dirToPlayer.y = 0;
       const dist = _dirToPlayer.length();
 
-      if (dist <= effectiveRange && dist > 0.1) {
-        _dirToPlayer.normalize();
-        const camYaw = m.baseYaw + m.sweepAngle;
-        _forwardVec.set(Math.sin(camYaw), 0, Math.cos(camYaw));
-        const angle = _forwardVec.angleTo(_dirToPlayer);
-        const halfCone = THREE.MathUtils.degToRad(45);
+      if (dist <= effectiveRange) {
+        let withinVisionSector = false;
+        if (dist <= 1.25) {
+          // 360-degree immediate proximity around the tripod base
+          withinVisionSector = true;
+        } else {
+          _dirToPlayer.normalize();
+          _forwardVec.set(Math.sin(camYaw), 0, Math.cos(camYaw));
+          const angle = _forwardVec.angleTo(_dirToPlayer);
+          // Visual sector is 84° (42° half-angle); add player body radius angular margin so edge contact triggers reliably
+          const bodyAngularMargin = Math.atan2(0.45, Math.max(0.5, dist));
+          const halfCone = THREE.MathUtils.degToRad(42) + bodyAngularMargin;
+          withinVisionSector = angle <= halfCone;
+        }
 
-        if (angle <= halfCone) {
+        if (withinVisionSector) {
           _eyePos.set(m.position.x, 1.45, m.position.z);
-          _targetPos.set(playerPos.x, isCrouching ? 0.72 : 1.42, playerPos.z);
+          _targetPos.set(playerPos.x, isCrouching ? 0.78 : 1.42, playerPos.z);
 
           if (!this.checkLineOccludedByColliders(_eyePos, _targetPos, colliders)) {
-            // DETECTED BY MONITOR!
+            // DETECTED BY 360° ROTATING MONITOR!
             m.isTriggered = true;
+            anyTriggered = true;
             m.rig.scanConeMat.color.setHex(0xef4444);
             (m.rig.statusLed.material as THREE.MeshBasicMaterial).color.setHex(0xef4444);
 
@@ -2122,7 +2243,7 @@ export class PatrolAndAISystem {
             );
             const activeCount = this.getActiveOnFootCount();
             this.escapeBannerTimer = 4.2;
-            this.escapeBannerMessage = `🚨 街区监控仪锁定你的坐标！监测器已自毁移除，参保车紧急下放【${deployed.name}】（场上共 ${activeCount} 名保安围捕中）！`;
+            this.escapeBannerMessage = `🚨 被 360° 旋转红外检测器锁定！参保车已紧急增派【${deployed.name}】（场上共 ${activeCount} 名保安搜捕中）！`;
 
             // Remove this monitor from the map immediately!
             this.removeMonitor(m);
@@ -2130,6 +2251,8 @@ export class PatrolAndAISystem {
         }
       }
     }
+
+    return anyTriggered;
   }
 
   /**
@@ -2204,11 +2327,13 @@ export class PatrolAndAISystem {
         currentSearchTarget: null,
         patrolRoute: [
           new THREE.Vector3(-44, 0, 0),
-          new THREE.Vector3(0, 0, -34),
+          new THREE.Vector3(-44, 0, -34),
+          new THREE.Vector3(38, 0, -34),
           new THREE.Vector3(38, 0, 0),
-          new THREE.Vector3(0, 0, 29),
+          new THREE.Vector3(38, 0, 29),
+          new THREE.Vector3(-44, 0, 29),
         ],
-        patrolIndex: num % 4,
+        patrolIndex: num % 6,
         waypointsVisitedSinceSweep: 0,
         inVehicle: false,
         animPhase: (num * 0.7) % 6.28,
@@ -2364,6 +2489,380 @@ export class PatrolAndAISystem {
     }
   }
 
+  /**
+   * Intelligent Building-Corner Detour & Multi-Angle Obstacle Avoidance for Security Officers:
+   * 1. Detects if a building or obstacle collider blocks the 2D path from `off.position` to `targetPoint`.
+   * 2. Routes around the building by selecting an unobstructed building outer corner or street intersection node.
+   * 3. Uses 13-angle lookahead feeler probes (0.75m ~ 2.2m) to steer smoothly around walls, corners, and street props.
+   * 4. Monitors movement progress to automatically recover if an officer ever gets impeded by a tight corner.
+   */
+  private computeNavigatedMoveDirection(
+    off: OfficerAgent,
+    targetPoint: THREE.Vector3,
+    moveSpeed: number,
+    dt: number,
+    colliders: ColliderBox[],
+    outDir: THREE.Vector3
+  ) {
+    if (!off.lastProgressPos) {
+      off.lastProgressPos = off.position.clone();
+      off.stuckTimer = 0;
+      off.stuckCount = 0;
+    }
+
+    // 1. Anti-Stuck Progress Monitor: check if the officer is making forward progress
+    off.stuckTimer = (off.stuckTimer || 0) + dt;
+    if (off.stuckTimer >= 0.45) {
+      const movedDist = Math.hypot(
+        off.position.x - off.lastProgressPos.x,
+        off.position.z - off.lastProgressPos.z
+      );
+      off.lastProgressPos.copy(off.position);
+      off.stuckTimer = 0;
+
+      if (moveSpeed > 0.5 && movedDist < 0.35) {
+        off.stuckCount = (off.stuckCount || 0) + 1;
+        // Force a fresh detour via the best open street intersection node that isn't blocked
+        const escapeNode = this.findUnstuckStreetNode(off, targetPoint, colliders);
+        if (escapeNode) {
+          if (!off.navDetourTarget) off.navDetourTarget = new THREE.Vector3();
+          off.navDetourTarget.copy(escapeNode);
+          off.navDetourTimer = 1.65;
+        }
+        if (off.state === 'Patrol' && (off.stuckCount || 0) >= 2 && off.patrolRoute.length > 0) {
+          off.patrolIndex = (off.patrolIndex + 1) % off.patrolRoute.length;
+          off.stuckCount = 0;
+        }
+      } else {
+        off.stuckCount = 0;
+      }
+    }
+
+    if (off.navDetourTimer && off.navDetourTimer > 0) {
+      off.navDetourTimer = Math.max(0, off.navDetourTimer - dt);
+    }
+
+    // 2. Check if an active detour waypoint has been reached
+    if (off.navDetourTarget) {
+      const distToDetour = Math.hypot(
+        off.navDetourTarget.x - off.position.x,
+        off.navDetourTarget.z - off.position.z
+      );
+      if (distToDetour < 1.05) {
+        off.navDetourTarget = null;
+        off.navDetourTimer = 0;
+      }
+    }
+
+    // 3. Check if direct 2D path to targetPoint is blocked by any building/obstacle
+    const directBlocker = this.findFirstBlockingCollider2D(
+      off.position.x,
+      off.position.z,
+      targetPoint.x,
+      targetPoint.z,
+      0.72,
+      colliders
+    );
+
+    if (!directBlocker && (!off.navDetourTimer || off.navDetourTimer <= 0)) {
+      // Clear line of movement to targetPoint!
+      off.navDetourTarget = null;
+    } else if (directBlocker) {
+      // Need a detour waypoint around the blocking building!
+      let needNewDetour = !off.navDetourTarget;
+      if (off.navDetourTarget) {
+        // Verify current detour waypoint is still reachable without hitting a wall
+        const detourBlocked = this.findFirstBlockingCollider2D(
+          off.position.x,
+          off.position.z,
+          off.navDetourTarget.x,
+          off.navDetourTarget.z,
+          0.55,
+          colliders
+        );
+        if (detourBlocked && (!off.navDetourTimer || off.navDetourTimer <= 0)) {
+          needNewDetour = true;
+        }
+      }
+
+      if (needNewDetour) {
+        const bestCorner = this.findBestBuildingDetourPoint(
+          off,
+          targetPoint,
+          directBlocker,
+          colliders
+        );
+        if (bestCorner) {
+          if (!off.navDetourTarget) off.navDetourTarget = new THREE.Vector3();
+          off.navDetourTarget.copy(bestCorner);
+          off.navDetourTimer = 1.15;
+        }
+      }
+    }
+
+    const activeGoal = off.navDetourTarget || targetPoint;
+    let baseDx = activeGoal.x - off.position.x;
+    let baseDz = activeGoal.z - off.position.z;
+    const baseLen = Math.hypot(baseDx, baseDz);
+    if (baseLen > 1e-4) {
+      baseDx /= baseLen;
+      baseDz /= baseLen;
+    } else {
+      baseDx = Math.sin(off.rotationY);
+      baseDz = Math.cos(off.rotationY);
+    }
+
+    // 4. Multi-Angle Lookahead Whisker / Feeler Steering (anticipates walls up to 2.2m ahead)
+    const baseYaw = Math.atan2(baseDx, baseDz);
+    const curFwdX = Math.sin(off.rotationY);
+    const curFwdZ = Math.cos(off.rotationY);
+
+    let bestScore = -Infinity;
+    let chosenDx = baseDx;
+    let chosenDz = baseDz;
+
+    for (let i = 0; i < FEELER_ANGLES.length; i++) {
+      const angleOffset = FEELER_ANGLES[i];
+      const testYaw = baseYaw + angleOffset;
+      const tx = Math.sin(testYaw);
+      const tz = Math.cos(testYaw);
+
+      // Probe 3 distances along the feeler ray
+      const hitNear = this.collidesAt(
+        off.position.x + tx * 0.78,
+        off.position.z + tz * 0.78,
+        0.54,
+        colliders
+      );
+      if (hitNear) continue;
+
+      const hitMid = this.collidesAt(
+        off.position.x + tx * 1.48,
+        off.position.z + tz * 1.48,
+        0.52,
+        colliders
+      );
+      const hitFar = this.collidesAt(
+        off.position.x + tx * 2.2,
+        off.position.z + tz * 2.2,
+        0.48,
+        colliders
+      );
+
+      // Score combines alignment with activeGoal + momentum alignment with current facing + clearance bonus
+      const goalAlign = tx * baseDx + tz * baseDz;
+      const momentumAlign = tx * curFwdX + tz * curFwdZ;
+      const clearanceScore = (hitMid ? -1.4 : 0) + (hitFar ? -0.55 : 0);
+      const score = goalAlign * 2.0 + momentumAlign * 0.65 + clearanceScore;
+
+      if (score > bestScore) {
+        bestScore = score;
+        chosenDx = tx;
+        chosenDz = tz;
+        // If straight ahead (0 deg) is completely clear at all 3 distances, take it immediately!
+        if (i === 0 && !hitMid && !hitFar) {
+          break;
+        }
+      }
+    }
+
+    outDir.set(chosenDx, 0, chosenDz).normalize();
+  }
+
+  /**
+   * Finds the first ColliderBox (expanded by `padding`) intersected by the 2D segment (x0,z0) -> (x1,z1)
+   */
+  private findFirstBlockingCollider2D(
+    x0: number,
+    z0: number,
+    x1: number,
+    z1: number,
+    padding: number,
+    colliders: ColliderBox[]
+  ): ColliderBox | null {
+    const dx = x1 - x0;
+    const dz = z1 - z0;
+    const segLen = Math.hypot(dx, dz);
+    if (segLen < 0.2) return null;
+
+    const rdx = dx / segLen;
+    const rdz = dz / segLen;
+
+    let closestT = segLen;
+    let firstBlocker: ColliderBox | null = null;
+
+    for (let i = 0; i < colliders.length; i++) {
+      const c = colliders[i];
+      // Ignore map outer border fences (width or depth > 95) for corner routing
+      if (c.maxX - c.minX > 95 || c.maxZ - c.minZ > 95) continue;
+
+      const minX = c.minX - padding;
+      const maxX = c.maxX + padding;
+      const minZ = c.minZ - padding;
+      const maxZ = c.maxZ + padding;
+
+      let tmin = 0;
+      let tmax = segLen;
+
+      if (Math.abs(rdx) > 1e-6) {
+        const invX = 1 / rdx;
+        let t1 = (minX - x0) * invX;
+        let t2 = (maxX - x0) * invX;
+        if (t1 > t2) {
+          const tmp = t1;
+          t1 = t2;
+          t2 = tmp;
+        }
+        tmin = Math.max(tmin, t1);
+        tmax = Math.min(tmax, t2);
+        if (tmin > tmax) continue;
+      } else if (x0 < minX || x0 > maxX) {
+        continue;
+      }
+
+      if (Math.abs(rdz) > 1e-6) {
+        const invZ = 1 / rdz;
+        let t1 = (minZ - z0) * invZ;
+        let t2 = (maxZ - z0) * invZ;
+        if (t1 > t2) {
+          const tmp = t1;
+          t1 = t2;
+          t2 = tmp;
+        }
+        tmin = Math.max(tmin, t1);
+        tmax = Math.min(tmax, t2);
+        if (tmin > tmax) continue;
+      } else if (z0 < minZ || z0 > maxZ) {
+        continue;
+      }
+
+      if (tmax >= 0.15 && tmin < closestT - 0.1) {
+        closestT = Math.max(0, tmin);
+        firstBlocker = c;
+      }
+    }
+
+    return firstBlocker;
+  }
+
+  /**
+   * Computes the best unobstructed building corner or street intersection node to walk around `blocker`
+   */
+  private findBestBuildingDetourPoint(
+    off: OfficerAgent,
+    targetPoint: THREE.Vector3,
+    blocker: ColliderBox,
+    colliders: ColliderBox[]
+  ): THREE.Vector3 | null {
+    const cornerMargin = 1.35;
+    const candidates: Array<[number, number]> = [
+      [blocker.minX - cornerMargin, blocker.minZ - cornerMargin],
+      [blocker.maxX + cornerMargin, blocker.minZ - cornerMargin],
+      [blocker.minX - cornerMargin, blocker.maxZ + cornerMargin],
+      [blocker.maxX + cornerMargin, blocker.maxZ + cornerMargin],
+    ];
+
+    for (let i = 0; i < STREET_NAV_NODES.length; i++) {
+      candidates.push([STREET_NAV_NODES[i][0], STREET_NAV_NODES[i][1]]);
+    }
+
+    const curFwdX = Math.sin(off.rotationY);
+    const curFwdZ = Math.cos(off.rotationY);
+
+    let bestScore = Infinity;
+    let bestX = 0;
+    let bestZ = 0;
+    let found = false;
+
+    for (let i = 0; i < candidates.length; i++) {
+      const cx = candidates[i][0];
+      const cz = candidates[i][1];
+
+      // Skip candidate if it is inside any collider
+      if (this.collidesAt(cx, cz, 0.62, colliders)) continue;
+
+      const distFromOff = Math.hypot(cx - off.position.x, cz - off.position.z);
+      if (distFromOff < 0.85) continue;
+
+      // Candidate must be directly reachable from officer's current position without hitting another wall
+      const blockedToCandidate = this.findFirstBlockingCollider2D(
+        off.position.x,
+        off.position.z,
+        cx,
+        cz,
+        0.52,
+        colliders
+      );
+      if (blockedToCandidate) continue;
+
+      const distToTarget = Math.hypot(targetPoint.x - cx, targetPoint.z - cz);
+      const dirX = (cx - off.position.x) / distFromOff;
+      const dirZ = (cz - off.position.z) / distFromOff;
+      const headingBonus = (dirX * curFwdX + dirZ * curFwdZ) * 2.2;
+
+      // Also check if the second leg (candidate -> targetPoint) is clear for an extra bonus
+      const secondLegBlocked = this.findFirstBlockingCollider2D(
+        cx,
+        cz,
+        targetPoint.x,
+        targetPoint.z,
+        0.55,
+        colliders
+      );
+      const secondLegPenalty = secondLegBlocked ? 6.5 : 0;
+
+      const totalCost = distFromOff + distToTarget * 1.15 + secondLegPenalty - headingBonus;
+      if (totalCost < bestScore) {
+        bestScore = totalCost;
+        bestX = cx;
+        bestZ = cz;
+        found = true;
+      }
+    }
+
+    return found ? new THREE.Vector3(bestX, 0, bestZ) : null;
+  }
+
+  /**
+   * Emergency unstuck helper: finds the best reachable street node when an officer is impeded
+   */
+  private findUnstuckStreetNode(
+    off: OfficerAgent,
+    targetPoint: THREE.Vector3,
+    colliders: ColliderBox[]
+  ): THREE.Vector3 | null {
+    let bestScore = Infinity;
+    let bestNode: readonly [number, number] | null = null;
+
+    for (let i = 0; i < STREET_NAV_NODES.length; i++) {
+      const nx = STREET_NAV_NODES[i][0];
+      const nz = STREET_NAV_NODES[i][1];
+      const dOff = Math.hypot(nx - off.position.x, nz - off.position.z);
+      if (dOff < 2.0) continue;
+
+      if (this.collidesAt(nx, nz, 0.62, colliders)) continue;
+
+      const blocked = this.findFirstBlockingCollider2D(
+        off.position.x,
+        off.position.z,
+        nx,
+        nz,
+        0.48,
+        colliders
+      );
+      if (blocked) continue;
+
+      const dTarget = Math.hypot(targetPoint.x - nx, targetPoint.z - nz);
+      const score = dOff + dTarget * 0.9;
+      if (score < bestScore) {
+        bestScore = score;
+        bestNode = STREET_NAV_NODES[i];
+      }
+    }
+
+    return bestNode ? new THREE.Vector3(bestNode[0], 0, bestNode[1]) : null;
+  }
+
   private moveAgentWithCollision(
     pos: THREE.Vector3,
     dir: THREE.Vector3,
@@ -2379,11 +2878,14 @@ export class PatrolAndAISystem {
     if (!this.collidesAt(nextX, pos.z, radius, colliders)) {
       pos.x = nextX;
     } else {
-      // Wall sliding along Z with wall avoidance
-      const slideZDir = Math.abs(dir.z) > 0.08 ? Math.sign(dir.z) : 1;
-      const slideZ = pos.z + slideZDir * step * 0.9;
-      if (!this.collidesAt(pos.x, slideZ, radius, colliders)) {
-        pos.z = slideZ;
+      // Smart bidirectional wall sliding along Z: test both signs of Z and pick the unobstructed side!
+      const primaryZSign = Math.abs(dir.z) > 0.02 ? Math.sign(dir.z) : 1;
+      const slideZ1 = pos.z + primaryZSign * step * 0.95;
+      const slideZ2 = pos.z - primaryZSign * step * 0.95;
+      if (!this.collidesAt(pos.x, slideZ1, radius, colliders)) {
+        pos.z = slideZ1;
+      } else if (!this.collidesAt(pos.x, slideZ2, radius, colliders)) {
+        pos.z = slideZ2;
       }
     }
 
@@ -2391,11 +2893,14 @@ export class PatrolAndAISystem {
     if (!this.collidesAt(pos.x, nextZ, radius, colliders)) {
       pos.z = nextZ;
     } else {
-      // Wall sliding along X with wall avoidance
-      const slideXDir = Math.abs(dir.x) > 0.08 ? Math.sign(dir.x) : 1;
-      const slideX = pos.x + slideXDir * step * 0.9;
-      if (!this.collidesAt(slideX, pos.z, radius, colliders)) {
-        pos.x = slideX;
+      // Smart bidirectional wall sliding along X: test both signs of X and pick the unobstructed side!
+      const primaryXSign = Math.abs(dir.x) > 0.02 ? Math.sign(dir.x) : 1;
+      const slideX1 = pos.x + primaryXSign * step * 0.95;
+      const slideX2 = pos.x - primaryXSign * step * 0.95;
+      if (!this.collidesAt(slideX1, pos.z, radius, colliders)) {
+        pos.x = slideX1;
+      } else if (!this.collidesAt(slideX2, pos.z, radius, colliders)) {
+        pos.x = slideX2;
       }
     }
 

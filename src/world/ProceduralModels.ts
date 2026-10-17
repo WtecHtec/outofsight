@@ -3465,14 +3465,14 @@ export function createStreetMonitorModel(mats: MaterialLibrary): StreetMonitorRi
   statusLed.position.set(0, 0.78, 0.12);
   group.add(statusLed);
 
-  // Swiveling Camera Head
+  // Swiveling 360-Degree Panoramic Camera & Laser Scanner Head
   const cameraHead = new THREE.Group();
   cameraHead.position.set(0, 1.48, 0);
   group.add(cameraHead);
 
-  // Motorized mount base
+  // Motorized 360° rotary turret base
   const motorBase = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.09, 0.09, 0.12, 10),
+    new THREE.CylinderGeometry(0.11, 0.11, 0.14, 16),
     tripodMat
   );
   motorBase.position.y = -0.06;
@@ -3480,40 +3480,48 @@ export function createStreetMonitorModel(mats: MaterialLibrary): StreetMonitorRi
 
   // Camera housing
   const camBody = new THREE.Mesh(
-    new THREE.BoxGeometry(0.18, 0.16, 0.28),
+    new THREE.BoxGeometry(0.2, 0.17, 0.3),
     mats.patrolWhite
   );
   camBody.position.set(0, 0.06, 0.04);
   camBody.castShadow = true;
   cameraHead.add(camBody);
 
-  // Front camera lens & IR ring
+  // Top 360° rotary radar dome on camera head
+  const rotaryDome = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.065, 0.075, 0.07, 14),
+    mats.sirenBlue
+  );
+  rotaryDome.position.set(0, 0.18, 0.02);
+  cameraHead.add(rotaryDome);
+
+  // Front camera lens & IR ring (+Z forward direction)
   const lens = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.06, 0.06, 0.08, 12).rotateX(Math.PI / 2),
+    new THREE.CylinderGeometry(0.065, 0.065, 0.09, 14).rotateX(Math.PI / 2),
     mats.tireRubber
   );
-  lens.position.set(0, 0.06, 0.2);
+  lens.position.set(0, 0.06, 0.21);
   const irRing = new THREE.Mesh(
-    new THREE.TorusGeometry(0.052, 0.012, 8, 16),
+    new THREE.TorusGeometry(0.056, 0.014, 8, 16),
     new THREE.MeshBasicMaterial({ color: 0xef4444 })
   );
-  irRing.position.set(0, 0.06, 0.24);
+  irRing.position.set(0, 0.06, 0.255);
   cameraHead.add(lens, irRing);
 
   // Antenna
   const antenna = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.01, 0.015, 0.32, 4),
+    new THREE.CylinderGeometry(0.01, 0.015, 0.32, 6),
     tripodMat
   );
-  antenna.position.set(0.06, 0.26, -0.05);
+  antenna.position.set(0.07, 0.26, -0.06);
   cameraHead.add(antenna);
 
-  // 7.5m sweeping detection ground sector (+Z forward aligned with lens)
-  const scanRadius = 7.5;
-  const scanAngleRad = THREE.MathUtils.degToRad(72);
+  // 8.5m 360°-rotating detection ground sector (+Z forward aligned with lens, placed flush on street ground y=0.05)
+  const scanRadius = 8.5;
+  const scanAngleRad = THREE.MathUtils.degToRad(84);
   const sectorGeo = new THREE.CircleGeometry(
     scanRadius,
-    24,
+    32,
     -Math.PI / 2 - scanAngleRad / 2,
     scanAngleRad
   );
@@ -3522,20 +3530,54 @@ export function createStreetMonitorModel(mats: MaterialLibrary): StreetMonitorRi
   const scanConeMat = new THREE.MeshBasicMaterial({
     color: 0x38bdf8,
     transparent: true,
-    opacity: 0.18,
+    opacity: 0.28,
     depthWrite: false,
     side: THREE.DoubleSide,
   });
   const scanConeMesh = new THREE.Mesh(sectorGeo, scanConeMat);
-  scanConeMesh.position.y = 0.05;
+  // cameraHead is at y=1.48, so -1.43 places the scanning sector at y=0.05 on the street surface!
+  scanConeMesh.position.y = -1.43;
   cameraHead.add(scanConeMesh);
 
-  // Soft vertical scanning laser plane
-  const beamGeo = new THREE.PlaneGeometry(0.3, scanRadius);
-  beamGeo.rotateX(-Math.PI / 2);
-  beamGeo.translate(0, 0, scanRadius * 0.5);
-  const scanBeamMesh = new THREE.Mesh(
-    beamGeo,
+  // Left & Right sector boundary rays + outer arc inside cameraHead so the rotating 84° cone is crisp and unmistakable
+  const edgeMat = new THREE.MeshBasicMaterial({
+    color: 0x7dd3fc,
+    transparent: true,
+    opacity: 0.65,
+    side: THREE.DoubleSide,
+    depthWrite: false,
+  });
+  [-1, 1].forEach((sideSign) => {
+    const edgeGeo = new THREE.PlaneGeometry(0.11, scanRadius);
+    edgeGeo.rotateX(-Math.PI / 2);
+    edgeGeo.translate(0, 0, scanRadius * 0.5);
+    edgeGeo.rotateY(sideSign * (scanAngleRad / 2));
+    const edgeMesh = new THREE.Mesh(edgeGeo, edgeMat);
+    edgeMesh.position.y = -1.415;
+    cameraHead.add(edgeMesh);
+  });
+
+  // Inner tripod base ring + Full 360° outer range perimeter ring on the ground
+  const baseRingGeo = new THREE.RingGeometry(0.55, 0.74, 28);
+  baseRingGeo.rotateX(-Math.PI / 2);
+  const baseRingMesh = new THREE.Mesh(
+    baseRingGeo,
+    new THREE.MeshBasicMaterial({
+      color: 0x38bdf8,
+      transparent: true,
+      opacity: 0.6,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+    })
+  );
+  baseRingMesh.position.y = 0.042;
+  group.add(baseRingMesh);
+
+  // Full 360° circular perimeter ring at scanRadius (8.5m) so players clearly see the 360° rotational coverage zone
+  const outerPerimeterGeo = new THREE.RingGeometry(scanRadius - 0.1, scanRadius, 64);
+  outerPerimeterGeo.rotateX(-Math.PI / 2);
+  const outerPerimeterMesh = new THREE.Mesh(
+    outerPerimeterGeo,
     new THREE.MeshBasicMaterial({
       color: 0x38bdf8,
       transparent: true,
@@ -3544,7 +3586,24 @@ export function createStreetMonitorModel(mats: MaterialLibrary): StreetMonitorRi
       depthWrite: false,
     })
   );
-  scanBeamMesh.position.y = 0.08;
+  outerPerimeterMesh.position.y = 0.038;
+  group.add(outerPerimeterMesh);
+
+  // Center scanning laser line on the ground (+Z forward)
+  const beamGeo = new THREE.PlaneGeometry(0.24, scanRadius);
+  beamGeo.rotateX(-Math.PI / 2);
+  beamGeo.translate(0, 0, scanRadius * 0.5);
+  const scanBeamMesh = new THREE.Mesh(
+    beamGeo,
+    new THREE.MeshBasicMaterial({
+      color: 0xe0f2fe,
+      transparent: true,
+      opacity: 0.52,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+    })
+  );
+  scanBeamMesh.position.y = -1.41;
   cameraHead.add(scanBeamMesh);
 
   return {
@@ -3556,5 +3615,259 @@ export function createStreetMonitorModel(mats: MaterialLibrary): StreetMonitorRi
     scanBeamMesh,
   };
 }
+
+/**
+ * High-Detail 3D Dimensional Escape Portal ("时空撤离传送门")
+ * Replaces the old simple box arch with an octagonal cyber-pedestal, twin energy pylons,
+ * Stargate chevron outer ring, counter-rotating inner ring, and swirling vortex membrane.
+ */
+export function createExtractionPortalModel(mats: MaterialLibrary): THREE.Group {
+  const portalGroup = new THREE.Group();
+  portalGroup.name = 'ExtractionDimensionalPortal';
+  // Face West (-X, rotation.y = -Math.PI / 2) so players approaching from the main street see the full glowing portal face
+  portalGroup.rotation.y = -Math.PI / 2;
+
+  const darkAlloyMat = new THREE.MeshStandardMaterial({
+    color: 0x0f172a,
+    roughness: 0.35,
+    metalness: 0.78,
+    flatShading: true,
+  });
+  const slateTrimMat = new THREE.MeshStandardMaterial({
+    color: 0x334155,
+    roughness: 0.45,
+    metalness: 0.55,
+    flatShading: true,
+  });
+  const cyanGlowMat = new THREE.MeshBasicMaterial({
+    color: 0x2dd4bf,
+  });
+  const skyGlowMat = new THREE.MeshBasicMaterial({
+    color: 0x38bdf8,
+  });
+  const goldAccentMat = new THREE.MeshStandardMaterial({
+    color: 0xfbbf24,
+    roughness: 0.28,
+    metalness: 0.82,
+    emissive: new THREE.Color(0xd97706),
+    emissiveIntensity: 0.35,
+    flatShading: true,
+  });
+
+  // 1. Two-Tier Octagonal Cyber-Rune Pedestal Base
+  const baseStep1 = new THREE.Mesh(
+    new THREE.CylinderGeometry(3.45, 3.85, 0.24, 8),
+    darkAlloyMat
+  );
+  baseStep1.position.y = 0.12;
+  baseStep1.receiveShadow = true;
+  baseStep1.castShadow = true;
+  portalGroup.add(baseStep1);
+
+  const baseStep2 = new THREE.Mesh(
+    new THREE.CylinderGeometry(2.85, 3.15, 0.22, 8),
+    slateTrimMat
+  );
+  baseStep2.position.y = 0.32;
+  baseStep2.receiveShadow = true;
+  baseStep2.castShadow = true;
+  portalGroup.add(baseStep2);
+
+  // Glowing pedestal circuit ring
+  const pedRingGeo = new THREE.RingGeometry(2.55, 2.78, 32);
+  pedRingGeo.rotateX(-Math.PI / 2);
+  const pedRing = new THREE.Mesh(pedRingGeo, cyanGlowMat);
+  pedRing.position.y = 0.44;
+  portalGroup.add(pedRing);
+
+  // 2. Twin Sculpted Energy Pylons (Left & Right Towers)
+  [-1, 1].forEach((side) => {
+    const pylonGroup = new THREE.Group();
+    pylonGroup.position.set(side * 2.55, 0.42, 0);
+
+    const lowerPillar = new THREE.Mesh(
+      new THREE.BoxGeometry(0.68, 1.8, 0.78),
+      darkAlloyMat
+    );
+    lowerPillar.position.y = 0.9;
+    lowerPillar.castShadow = true;
+    pylonGroup.add(lowerPillar);
+
+    const upperPillar = new THREE.Mesh(
+      new THREE.BoxGeometry(0.52, 2.2, 0.62),
+      slateTrimMat
+    );
+    upperPillar.position.set(side * -0.12, 2.7, 0);
+    upperPillar.rotation.z = side * 0.12;
+    upperPillar.castShadow = true;
+    pylonGroup.add(upperPillar);
+
+    // Glowing vertical energy conduit strip on pylon
+    const conduit = new THREE.Mesh(
+      new THREE.BoxGeometry(0.14, 3.5, 0.82),
+      mats.extractionEmerald
+    );
+    conduit.position.set(0, 1.95, 0);
+    pylonGroup.add(conduit);
+
+    // Gold armor collar rings
+    [0.6, 1.7, 3.1].forEach((py) => {
+      const collar = new THREE.Mesh(
+        new THREE.BoxGeometry(0.76, 0.14, 0.86),
+        goldAccentMat
+      );
+      collar.position.y = py;
+      pylonGroup.add(collar);
+    });
+
+    // Top crystal emitter spire
+    const spire = new THREE.Mesh(
+      new THREE.OctahedronGeometry(0.36, 0),
+      skyGlowMat
+    );
+    spire.position.set(side * -0.22, 4.15, 0);
+    pylonGroup.add(spire);
+
+    portalGroup.add(pylonGroup);
+  });
+
+  // 3. Outer Stargate Torus Arch & 12 Glowing Chevron Nodes (Centered at y = 2.85)
+  const portalCenterY = 2.85;
+  const outerArch = new THREE.Mesh(
+    new THREE.TorusGeometry(2.25, 0.22, 12, 36),
+    darkAlloyMat
+  );
+  outerArch.position.y = portalCenterY;
+  outerArch.castShadow = true;
+  portalGroup.add(outerArch);
+
+  const outerGoldTrim = new THREE.Mesh(
+    new THREE.TorusGeometry(2.48, 0.06, 8, 36),
+    goldAccentMat
+  );
+  outerGoldTrim.position.y = portalCenterY;
+  portalGroup.add(outerGoldTrim);
+
+  // 12 Glowing Stargate Chevron Crystals around the outer ring
+  for (let i = 0; i < 12; i++) {
+    const angle = (i * Math.PI * 2) / 12;
+    const chevron = new THREE.Mesh(
+      new THREE.BoxGeometry(0.18, 0.34, 0.52),
+      i % 2 === 0 ? mats.extractionEmerald : skyGlowMat
+    );
+    chevron.position.set(
+      Math.cos(angle) * 2.26,
+      portalCenterY + Math.sin(angle) * 2.26,
+      0
+    );
+    chevron.rotation.z = angle - Math.PI / 2;
+    portalGroup.add(chevron);
+  }
+
+  // 4. Counter-Rotating Inner Geometric Ring (animated in App.tsx via name 'portalInnerRing')
+  const portalInnerRing = new THREE.Group();
+  portalInnerRing.name = 'portalInnerRing';
+  portalInnerRing.position.set(0, portalCenterY, 0);
+
+  const innerTorus = new THREE.Mesh(
+    new THREE.TorusGeometry(1.92, 0.085, 10, 32),
+    mats.extractionEmerald
+  );
+  portalInnerRing.add(innerTorus);
+
+  for (let i = 0; i < 8; i++) {
+    const angle = (i * Math.PI * 2) / 8;
+    const shard = new THREE.Mesh(
+      new THREE.OctahedronGeometry(0.16, 0),
+      skyGlowMat
+    );
+    shard.position.set(Math.cos(angle) * 1.82, Math.sin(angle) * 1.82, 0);
+    portalInnerRing.add(shard);
+  }
+  portalGroup.add(portalInnerRing);
+
+  // 5. Swirling Dimensional Vortex Event Horizon (animated in App.tsx via name 'portalVortex')
+  const portalVortex = new THREE.Group();
+  portalVortex.name = 'portalVortex';
+  portalVortex.position.set(0, portalCenterY, 0);
+
+  const outerMembraneMat = new THREE.MeshBasicMaterial({
+    color: 0x10b981,
+    transparent: true,
+    opacity: 0.38,
+    side: THREE.DoubleSide,
+    depthWrite: false,
+  });
+  const outerMembrane = new THREE.Mesh(
+    new THREE.CircleGeometry(1.88, 32),
+    outerMembraneMat
+  );
+  portalVortex.add(outerMembrane);
+
+  const midSwirlRingMat = new THREE.MeshBasicMaterial({
+    color: 0x38bdf8,
+    transparent: true,
+    opacity: 0.55,
+    side: THREE.DoubleSide,
+    depthWrite: false,
+  });
+  const midSwirlRing = new THREE.Mesh(
+    new THREE.RingGeometry(1.05, 1.48, 24),
+    midSwirlRingMat
+  );
+  midSwirlRing.position.z = 0.02;
+  const midSwirlBack = midSwirlRing.clone();
+  midSwirlBack.position.z = -0.02;
+  portalVortex.add(midSwirlRing, midSwirlBack);
+
+  const innerCoreDiscMat = new THREE.MeshBasicMaterial({
+    color: 0xa7f3d0,
+    transparent: true,
+    opacity: 0.72,
+    side: THREE.DoubleSide,
+    depthWrite: false,
+  });
+  const innerCoreDisc = new THREE.Mesh(
+    new THREE.CircleGeometry(0.72, 24),
+    innerCoreDiscMat
+  );
+  innerCoreDisc.position.z = 0.04;
+  const innerCoreBack = innerCoreDisc.clone();
+  innerCoreBack.position.z = -0.04;
+  portalVortex.add(innerCoreDisc, innerCoreBack);
+
+  // Crossed dimensional energy blades inside the vortex
+  for (let b = 0; b < 3; b++) {
+    const blade = new THREE.Mesh(
+      new THREE.PlaneGeometry(3.4, 0.16),
+      new THREE.MeshBasicMaterial({
+        color: 0x6ee7b7,
+        transparent: true,
+        opacity: 0.5,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+      })
+    );
+    blade.rotation.z = (b * Math.PI) / 3;
+    portalVortex.add(blade);
+  }
+  portalGroup.add(portalVortex);
+
+  // 6. Floating Crown Star Beacon ('beaconOrb') & Portal Point Light
+  const beaconOrb = new THREE.Mesh(
+    new THREE.OctahedronGeometry(0.45, 0),
+    mats.extractionEmerald
+  );
+  beaconOrb.name = 'beaconOrb';
+  beaconOrb.position.set(0, 5.65, 0);
+  portalGroup.add(beaconOrb);
+
+  const portalLight = new THREE.PointLight(0x2dd4bf, 3.6, 15);
+  portalLight.position.set(0, portalCenterY, 0);
+  portalGroup.add(portalLight);
+
+  return portalGroup;
+}
+
 
 
