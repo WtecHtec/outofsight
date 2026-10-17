@@ -1,0 +1,6 @@
+{
+  "name": "OUT OF SIGHT — 视线之外",
+  "description": "3D 第三人称潜行躲猫猫游戏。观察执法巡逻路线、判断视野与射线遮挡、利用掩体与藏身点收集三件任务物品并在封锁解除前撤离。",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
